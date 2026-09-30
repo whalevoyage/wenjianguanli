@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.npm-cache/
+npm-debug.log*
+
+# IDE and operating-system files
+.vscode/
+.idea/
+.workbuddy/
+*.swp
+Thumbs.db
+desktop.ini
+
+# Application-generated data
+logs/
+reports/
+backups/
+*.log
+.filepilot/
