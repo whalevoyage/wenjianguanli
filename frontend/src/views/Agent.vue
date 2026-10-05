@@ -123,8 +123,8 @@ const closePermPopover = () => permPop.value?.hide?.()
 
 const LONG_TEXT = 320
 /* 后端 /api/settings/agent 不可用时的兜底显示 */
-const DEFAULT_MODEL_NAME = 'deepseek-v4.1-flash'
-const MODEL_OPTIONS_FALLBACK = ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner']
+const DEFAULT_MODEL_NAME = 'deepseek-flash'
+const MODEL_OPTIONS_FALLBACK = ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner']
 
 const modelLabel = computed(() => settings.value?.model || status.value?.model || DEFAULT_MODEL_NAME)
 // 兼容旧版后端：旧进程可能只返回 chat/reasoner，前端仍保留当前发行版模型选项。

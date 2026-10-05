@@ -19,10 +19,10 @@ import urllib.request
 from .. import config, database, fsutil, secrets, store
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL") or "deepseek-v4.1-flash"
+DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL") or "deepseek-flash"
 
 # 界面上可选的模型（也允许自己填）
-MODEL_OPTIONS = ["deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"]
+MODEL_OPTIONS = ["deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"]
 
 ALLOWED_ACTIONS = [
     "scan", "tree", "duplicate_scan", "junk_scan", "migrate_plan",
