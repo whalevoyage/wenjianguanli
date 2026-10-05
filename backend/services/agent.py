@@ -55,9 +55,9 @@ PATH_PARAMS = {
     "backup": ["source_dir"],
 }
 
-SYSTEM_PROMPT = """你是本地文件管理工具的指令翻译器。把用户的中文需求翻译成一个 JSON 计划。
+SYSTEM_PROMPT = """你是 Atlas 助手。你既能帮助用户完成文件管理操作，也能回答普通问题、介绍自己和当前模型。文件管理需求才需要输出可执行 JSON 计划；普通问题请直接回答，并输出 action 为 none 的 JSON。
 
-只允许输出以下 action 之一（只处理与文件/磁盘相关的需求，无关需求用 none）：
+只允许输出以下 action 之一；普通问答、身份/模型问题或与文件无关的问题，使用 action 为 none 的 JSON，并在 reason 中直接回答：
 - scan            扫描目录，统计数量/体积/类型分布/大文件
 - tree            生成目录占用树（空间可视化）
 - duplicate_scan  查找内容重复的文件
@@ -89,7 +89,7 @@ DRIVE_CN_RE = re.compile(r"([A-Za-z])\s*盘")
 STREAM_SYSTEM_PROMPT = """你是本地文件管理工具的指令翻译器。
 先用一句中文说明你的判断（不超过 40 个字），然后输出一个 JSON 代码块。
 
-只允许以下 action 之一（只处理文件/磁盘相关需求，无关需求用 none）：
+文件管理需求才生成计划；普通问题直接回答，JSON 使用 action=none：
 - scan            扫描目录
 - tree            目录占用树
 - duplicate_scan  查找重复文件
@@ -495,10 +495,17 @@ def _rule_explanation(path_text: str) -> dict:
 
 
 def query_local(message: str) -> dict | None:
-    """Answer read-only status and explanation questions with zero tokens."""
+    """Answer read-only status, identity and explanation questions with zero tokens."""
     text = (message or "").strip()
     if not text:
         return None
+
+    if re.search(r"(你是谁|你是什么|什么模型|哪个模型|模型名称|自我介绍)", text):
+        return {
+            "source": "local", "tokens": 0, "type": "general",
+            "message": f"我是 Atlas 文件管理助手，当前模型是 {resolve_model()}。我可以处理文件扫描、查重、垃圾文件、迁移、备份等操作；普通问题也可以正常回答。",
+            "plan": {"action": "none", "reason": "这是普通问答，不需要文件操作"},
+        }
 
     if re.search(r"(为什么|为何|原因).*(垃圾|清理|判定|规则)", text):
         paths = _extract_paths(text)
@@ -841,3 +848,4 @@ def stream_chat(message: str, context: dict | None = None):
         "needs_path": plan.get("needs_path", False),
         "hint": "本回答消耗了 token；确认后执行由本地完成。",
     })}
+
