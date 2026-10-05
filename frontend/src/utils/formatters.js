@@ -17,6 +17,13 @@ export function formatDateTime(value, fallback = '—') {
   return value ? String(value).replace('T', ' ') : fallback
 }
 
+export function formatShortTime(value, fallback = '—') {
+  if (!value) return fallback
+  const text = String(value)
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
+  return match ? `${match[2]}-${match[3]} ${match[4]}:${match[5]}` : text
+}
+
 export function formatDuration(seconds, fallback = '—') {
   const value = Number(seconds)
   if (!Number.isFinite(value) || value < 0) return fallback

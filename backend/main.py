@@ -1,359 +1,593 @@
+"""FilePilot Lite API。
+
+路由层只做三件事：校验入参、创建任务、把请求交给 services。
+所有耗时操作都返回一个 job，前端通过 /api/jobs/{id}/stream 订阅进度。
+"""
 from __future__ import annotations
 
-import hashlib
 import json
-import os
-import shutil
-import tempfile
-import time
-import zipfile
-from collections import defaultdict
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+from datetime import datetime
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-
-ROOT = Path(__file__).resolve().parent.parent
-STATE_DIR = ROOT / ".filepilot"
-STATE_DIR.mkdir(exist_ok=True)
-LOG_FILE = STATE_DIR / "logs.json"
-UNDO_FILE = STATE_DIR / "last_organization.json"
-
-app = FastAPI(title="FilePilot Lite API", version="1.0.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+from . import config, diagnostics, fsutil, permissions, scheduler, store
+from .jobs import JOB_TYPES, JobContext, manager
+from .services import (
+    agent, backup, clean, duplicates, junk, migrate, overview, projects, scan, virtual,
 )
 
+app = FastAPI(title="FilePilot Lite API", version="2.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
+scheduler.start_runner()
 
-class PathRequest(BaseModel):
+WEB_DIR = config.APP_ROOT / "web"
+
+
+# ---------------------------------------------------------------------------
+# 请求模型
+# ---------------------------------------------------------------------------
+
+class ScanRequest(BaseModel):
     path: str
+    excludes: list[str] | None = None
+    max_depth: int | None = Field(default=None, ge=0, le=50)
+    stale_days: int = Field(default=30, ge=0, le=36500)
+    stale_min_size: int = Field(default=0, ge=0)
+
+
+class TreeRequest(BaseModel):
+    path: str
+    depth: int = Field(default=config.TREE_DEFAULT_DEPTH, ge=0, le=20)
+    excludes: list[str] | None = None
+
+
+class DuplicateRequest(BaseModel):
+    path: str
+    excludes: list[str] | None = None
+    min_size: int = Field(default=1, ge=0)
+
+
+class JunkRequest(BaseModel):
+    path: str
+    excludes: list[str] | None = None
+    rules: list[str] | None = None
+    include_caution: bool = False
+
+
+class VirtualRequest(BaseModel):
+    path: str
+    group_by: str = "type"
+    excludes: list[str] | None = None
+    min_size: int = 0
+    max_depth: int = 0
+    limit: int = Field(default=config.VIRTUAL_ITEM_LIMIT, ge=1, le=100000)
+
+
+class VirtualExportRequest(BaseModel):
+    root: str = ""
+    group_by: str = "type"
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ProjectRequest(BaseModel):
+    path: str
+    excludes: list[str] | None = None
+    max_depth: int = Field(default=0, ge=0, le=50)
+    zombie_days: int = Field(default=config.ZOMBIE_DAYS, ge=0, le=36500)
+    limit: int = Field(default=config.PROJECT_LIMIT, ge=1, le=100000)
+
+
+class MigrateRequest(BaseModel):
+    source_dir: str
+    target_dir: str
+    excludes: list[str] | None = None
+    dry_run: bool = True
+    mode: str = "move"
+    create_junction: bool = False
+    min_size: int = 0
+    max_items: int = Field(default=20000, ge=1, le=100000)
+    rate_limit: float = Field(default=0.02, ge=0, le=10)
+    items: list[dict[str, Any]] | None = None
+
+
+class CleanItem(BaseModel):
+    path: str
+    is_dir: bool = False
+    rule: str = ""
+    size: int = Field(default=0, ge=0)
+
+
+class CleanRequest(BaseModel):
+    items: list[CleanItem] = Field(default_factory=list)
+    mode: str = clean.MODE_ISOLATE
 
 
 class BackupRequest(BaseModel):
     source_dir: str
-    dest_dir: str
+    dest_dir: str = ""
+    excludes: list[str] | None = None
 
 
-class DuplicateMoveRequest(BaseModel):
-    root: str
-    files: list[dict[str, Any]] = Field(default_factory=list)
+class TrashRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list)
 
 
-class OrganizeRequest(BaseModel):
-    source_dir: str
-    target_dir: str
+class AgentRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
-class AdviceRequest(BaseModel):
-    question: str = ""
-    summary: dict[str, Any] = Field(default_factory=dict)
+class ConversationTitleRequest(BaseModel):
+    title: str = Field(default="", max_length=60)
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+class CancelJobRequest(BaseModel):
+    """取消任务时带上调用来源，写进审计日志，便于事后追溯。"""
+    reason: str = ""
 
 
-def format_size(value: int | float) -> str:
-    size = float(value)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size < 1024 or unit == "TB":
-            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
-        size /= 1024
-    return f"{size:.1f} TB"
+class SafetySettingsRequest(BaseModel):
+    """切换权限档位。full 必须带 confirm=True。"""
+    mode: str
+    confirm: bool = False
 
 
-def safe_path(value: str, *, must_exist: bool = False) -> Path:
-    path = Path(value).expanduser()
-    if must_exist and not path.exists():
-        raise HTTPException(status_code=400, detail=f"路径不存在: {value}")
-    return path
+class AgentSettingsRequest(BaseModel):
+    """两个字段都可省略；传空串 = 清除该字段（回到环境变量/默认值）。"""
+    api_key: str | None = None
+    model: str | None = None
 
 
-def read_logs() -> list[dict[str, Any]]:
-    try:
-        return json.loads(LOG_FILE.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
+class RecipeRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1, max_length=2000)
+    action: dict[str, Any] = Field(default_factory=dict)
 
 
-def write_log(kind: str, result: str, path: str = "", note: str = "") -> None:
-    logs = read_logs()
-    logs.append({"time": now_iso(), "type": kind, "result": result, "path": path, "note": note})
-    LOG_FILE.write_text(json.dumps(logs[-500:], ensure_ascii=False, indent=2), encoding="utf-8")
+class ScheduleRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    kind: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    interval_minutes: int = Field(default=10080, ge=5, le=525600)
+    next_run_at: str | None = None
 
 
-def iter_files(root: Path):
-    try:
-        for entry in root.rglob("*"):
-            if entry.is_file() and ".filepilot" not in entry.parts:
-                yield entry
-    except OSError:
-        return
+# ---------------------------------------------------------------------------
+# 公共
+# ---------------------------------------------------------------------------
+
+def _friendly(exc: BaseException) -> HTTPException:
+    return HTTPException(status_code=400, detail=fsutil.human_error(exc))
 
 
-def category_for(path: Path) -> str:
-    ext = path.suffix.lower()
-    groups = {
-        "图片": {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico"},
-        "视频": {".mp4", ".mov", ".avi", ".mkv", ".webm"},
-        "音频": {".mp3", ".wav", ".flac", ".aac", ".m4a"},
-        "文档": {".doc", ".docx", ".pdf", ".txt", ".md", ".rtf"},
-        "表格": {".xls", ".xlsx", ".csv", ".tsv"},
-        "压缩包": {".zip", ".rar", ".7z", ".tar", ".gz"},
-        "代码": {".py", ".js", ".ts", ".vue", ".html", ".css", ".json", ".java", ".go"},
-    }
-    for name, extensions in groups.items():
-        if ext in extensions:
-            return name
-    return "其他"
+def _launch(job_type: str, title: str, target: str, params: dict, worker: Callable[[JobContext], Any]) -> dict:
+    # 「只读」档在入口就拒，不要等任务跑起来再逐项失败。
+    # 例外：migrate 的 dry_run 只生成计划（清单 CSV 写在 .filepilot/reports），不动用户文件。
+    if job_type in config.WRITE_JOB_TYPES and permissions.current() == "readonly":
+        planning_only = job_type == "migrate" and bool(params.get("dry_run"))
+        if not planning_only:
+            raise HTTPException(status_code=400, detail="当前是「只读」档：只允许扫描、预览与生成计划")
+    job = manager.create(job_type, title, target, params)
+    manager.start(job["id"], worker)
+    return {"job_id": job["id"], "job": manager.get(job["id"])}
 
 
-def scan_path(root: Path) -> dict[str, Any]:
-    started = time.perf_counter()
-    if not root.exists() or not root.is_dir():
-        raise HTTPException(status_code=400, detail=f"目录不存在: {root}")
-    total_files = total_size = 0
-    dirs = 0
-    categories: dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "size": 0})
-    large_files: list[dict[str, Any]] = []
-    warnings: list[str] = []
-    for current, subdirs, files in os.walk(root):
-        dirs += len(subdirs)
-        for name in files:
-            path = Path(current) / name
-            try:
-                size = path.stat().st_size
-            except OSError as exc:
-                warnings.append(f"无法读取 {path}: {exc}")
-                continue
-            total_files += 1
-            total_size += size
-            category = category_for(path)
-            categories[category]["count"] += 1
-            categories[category]["size"] += size
-            if size >= 100 * 1024 * 1024:
-                large_files.append({"name": name, "path": str(path), "size": size, "size_text": format_size(size), "category": category})
-    large_files.sort(key=lambda item: item["size"], reverse=True)
-    category_stats = [
-        {"category": key, "name": key, "count": value["count"], "size": value["size"], "size_text": format_size(value["size"])}
-        for key, value in sorted(categories.items(), key=lambda item: item[1]["size"], reverse=True)
-    ]
-    result = {
-        "root": str(root), "scan_time": now_iso(), "duration_seconds": round(time.perf_counter() - started, 3),
-        "total_files": total_files, "total_dirs": dirs, "total_size": total_size, "total_size_text": format_size(total_size),
-        "category_stats": category_stats, "large_files": large_files[:100], "largest_file": large_files[0] if large_files else None,
-        "warnings": warnings[:100],
-    }
-    write_log("scan", "成功", str(root), f"扫描 {total_files} 个文件")
-    return result
-
+# ---------------------------------------------------------------------------
+# 基础
+# ---------------------------------------------------------------------------
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "filepilot-lite", "time": now_iso()}
+    return {"status": "ok", "service": "filepilot-lite", "version": "2.0.0", "time": fsutil.now_iso()}
 
 
-@app.get("/api/ai/status")
-def ai_status():
-    configured = bool(os.getenv("DEEPSEEK_API_KEY"))
-    return {"configured": configured, "provider": "DeepSeek" if configured else "本地规则建议"}
+@app.get("/api/diagnostics")
+def get_diagnostics():
+    return diagnostics.check()
 
+
+@app.get("/api/config")
+def get_config():
+    return {
+        "drives": config.drive_letters(),
+        "excludes": config.DEFAULT_EXCLUDES,
+        "junk_rules": [
+            {"id": rule["id"], "name": rule["name"], "level": rule["level"], "desc": rule["desc"]}
+            for rule in config.JUNK_RULES
+        ],
+        "levels": config.JUNK_LEVEL_META,
+        "safety": {
+            "protected": [str(path) for path in config.SOFT_PROTECTED_DIRS],
+            "self_protected": [str(path) for path in config.SELF_PROTECTED_DIRS],
+            "readonly": config.SYSTEM_READONLY_PREFIXES,
+            "permission": permissions.describe(),
+        },
+        "trash_dir": str(config.TRASH_DIR),
+        "large_file_threshold": config.LARGE_FILE_THRESHOLD,
+        "virtual_modes": config.VIRTUAL_GROUP_MODES,
+        "job_types": JOB_TYPES,
+    }
+
+
+@app.get("/api/overview")
+def get_overview():
+    return overview.get_overview()
+
+
+# ---------------------------------------------------------------------------
+# 任务
+# ---------------------------------------------------------------------------
+
+@app.get("/api/jobs")
+def list_jobs(limit: int = 50):
+    return {"jobs": manager.list(max(1, min(limit, 200)))}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str):
+    try:
+        return manager.get(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+
+@app.get("/api/jobs/{job_id}/stream")
+def stream_job(job_id: str, last_event_id: int = 0):
+    try:
+        manager.get(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    return StreamingResponse(
+        manager.stream(job_id, max(0, last_event_id)),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str, payload: CancelJobRequest | None = None):
+    try:
+        job = manager.cancel(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    # 来源记在任务上，由任务收尾时统一写进审计日志——否则同一条取消会写两遍
+    reason = (payload.reason if payload else "") or "未标注来源"
+    manager.update(job_id, cancel_reason=reason)
+    return manager.get(job_id)
+
+
+@app.post("/api/jobs/{job_id}/rollback")
+def rollback_job(job_id: str):
+    try:
+        return manager.rollback(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+
+# ---------------------------------------------------------------------------
+# 分析
+# ---------------------------------------------------------------------------
 
 @app.post("/api/scan")
-def scan(request: PathRequest):
-    return scan_path(safe_path(request.path, must_exist=True))
+def start_scan(request: ScanRequest):
+    try:
+        root = fsutil.resolve_dir(request.path)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    return _launch("scan", f"扫描 {root}", str(root), request.model_dump(), scan.run_scan)
 
 
-@app.get("/api/logs")
-def logs():
-    return read_logs()
-
-
-@app.post("/api/backup")
-def backup(request: BackupRequest):
-    source = safe_path(request.source_dir, must_exist=True)
-    if not source.is_dir():
-        raise HTTPException(status_code=400, detail="源路径必须是目录")
-    dest = safe_path(request.dest_dir)
-    dest.mkdir(parents=True, exist_ok=True)
-    archive = dest / f"{source.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-    skipped = {".git", "node_modules", ".filepilot"}
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in source.rglob("*"):
-            if path.is_file() and not any(part in skipped for part in path.relative_to(source).parts):
-                zf.write(path, path.relative_to(source.parent))
-    size = archive.stat().st_size
-    result = {"success": True, "source": str(source), "zip_path": str(archive), "size": size, "size_text": format_size(size), "backup_time": now_iso()}
-    write_log("backup", "成功", str(source), str(archive))
-    return result
-
-
-def digest(path: Path) -> str:
-    hasher = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
+@app.post("/api/tree")
+def start_tree(request: TreeRequest):
+    try:
+        root = fsutil.resolve_dir(request.path)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    return _launch("tree", f"空间地图 {root}", str(root), request.model_dump(), scan.run_tree)
 
 
 @app.post("/api/duplicates/scan")
-def duplicate_scan(request: PathRequest):
-    root = safe_path(request.path, must_exist=True)
-    if not root.is_dir():
-        raise HTTPException(status_code=400, detail="路径必须是目录")
-    buckets: dict[tuple[int, str], list[Path]] = defaultdict(list)
-    errors: list[str] = []
-    scanned = 0
-    for path in iter_files(root):
-        try:
-            stat = path.stat()
-            scanned += 1
-            if stat.st_size > 0:
-                buckets[(stat.st_size, digest(path))].append(path)
-        except OSError as exc:
-            errors.append(f"{path}: {exc}")
-    groups = []
-    for (size, checksum), paths in buckets.items():
-        if len(paths) < 2:
-            continue
-        items = [{"path": str(path), "name": path.name, "size": size, "size_text": format_size(size)} for path in paths]
-        groups.append({"sha256": checksum, "size": size, "size_text": format_size(size), "count": len(items), "original": items[0], "redundant_files": items[1:], "files": items})
-    groups.sort(key=lambda item: item["size"] * (item["count"] - 1), reverse=True)
-    redundant = sum(len(item["redundant_files"]) for item in groups)
-    result = {"root": str(root), "scan_time": now_iso(), "duration_seconds": 0, "scanned_files": scanned, "group_count": len(groups), "redundant_file_count": redundant, "reclaimable_size": sum(item["size"] * len(item["redundant_files"]) for item in groups), "reclaimable_size_text": format_size(sum(item["size"] * len(item["redundant_files"]) for item in groups)), "groups": groups, "errors": errors[:100]}
-    write_log("duplicates", "成功", str(root), f"发现 {len(groups)} 组重复文件")
-    return result
-
-
-@app.post("/api/duplicates/move")
-def move_duplicates(request: DuplicateMoveRequest):
-    root = safe_path(request.root, must_exist=True)
-    recovery = root / ".filepilot_recovery"
-    recovery.mkdir(exist_ok=True)
-    moved = []
-    for item in request.files:
-        source = safe_path(str(item.get("path", "")))
-        if not source.is_file():
-            continue
-        target = recovery / source.name
-        index = 1
-        while target.exists():
-            target = recovery / f"{source.stem}_{index}{source.suffix}"
-            index += 1
-        shutil.move(str(source), str(target))
-        moved.append({"from": str(source), "to": str(target)})
-    write_log("duplicates", "成功", str(root), f"移动 {len(moved)} 个重复副本")
-    return {"success": True, "moved_count": len(moved), "moved": moved, "recovery_dir": str(recovery)}
-
-
-def organization_items(source: Path, target: Path) -> tuple[list[dict[str, Any]], list[str]]:
-    items: list[dict[str, Any]] = []
-    errors: list[str] = []
-    for path in iter_files(source):
-        try:
-            relative = path.relative_to(source)
-            category = category_for(path)
-            destination = target / category / path.name
-            items.append({"source": str(path), "path": str(path), "target": str(destination), "name": path.name, "category": category, "size": path.stat().st_size, "size_text": format_size(path.stat().st_size), "relative_path": str(relative)})
-        except OSError as exc:
-            errors.append(f"{path}: {exc}")
-    return items, errors
-
-
-@app.post("/api/organize/preview")
-def organize_preview(request: OrganizeRequest):
-    source, target = safe_path(request.source_dir, must_exist=True), safe_path(request.target_dir)
-    if not source.is_dir():
-        raise HTTPException(status_code=400, detail="源路径必须是目录")
-    items, errors = organization_items(source, target)
-    stats: dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "size": 0})
-    for item in items:
-        stats[item["category"]]["count"] += 1
-        stats[item["category"]]["size"] += item["size"]
-    category_stats = [{"category": key, "name": key, "count": value["count"], "size": value["size"], "size_text": format_size(value["size"])} for key, value in sorted(stats.items())]
-    total_size = sum(item["size"] for item in items)
-    return {"source_dir": str(source), "target_dir": str(target), "created_at": now_iso(), "item_count": len(items), "total_size": total_size, "total_size_text": format_size(total_size), "category_stats": category_stats, "items": items[:500], "errors": errors[:100]}
-
-
-@app.post("/api/organize/execute")
-def organize_execute(request: OrganizeRequest):
-    source, target = safe_path(request.source_dir, must_exist=True), safe_path(request.target_dir)
-    items, errors = organization_items(source, target)
-    moved: list[dict[str, str]] = []
-    for item in items:
-        old, new = Path(item["source"]), Path(item["target"])
-        try:
-            new.parent.mkdir(parents=True, exist_ok=True)
-            if new.exists():
-                new = new.with_name(f"{new.stem}_{int(time.time() * 1000)}{new.suffix}")
-            shutil.move(str(old), str(new))
-            moved.append({"from": str(old), "to": str(new)})
-        except OSError as exc:
-            errors.append(f"{old}: {exc}")
-    UNDO_FILE.write_text(json.dumps(moved, ensure_ascii=False, indent=2), encoding="utf-8")
-    total = sum(Path(item["from"]).stat().st_size if Path(item["from"]).exists() else 0 for item in moved)
-    result = {"success": not errors, "source_dir": str(source), "target_dir": str(target), "moved_count": len(moved), "moved_size": total, "moved_size_text": format_size(total), "finished_at": now_iso(), "errors": errors[:100]}
-    write_log("organize", "成功" if not errors else "部分完成", str(source), f"移动 {len(moved)} 个文件")
-    return result
-
-
-@app.post("/api/organize/undo")
-def organize_undo():
+def start_duplicate_scan(request: DuplicateRequest):
     try:
-        moved = json.loads(UNDO_FILE.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {"success": False, "moved_count": 0, "errors": ["没有可撤销的整理记录"]}
-    restored = 0
-    errors = []
-    for item in reversed(moved):
-        source, target = Path(item["from"]), Path(item["to"])
+        root = fsutil.resolve_dir(request.path)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    return _launch("duplicate", f"查找重复文件 {root}", str(root), request.model_dump(), duplicates.run_duplicate_scan)
+
+
+@app.post("/api/junk/scan")
+def start_junk_scan(request: JunkRequest):
+    try:
+        root = fsutil.resolve_dir(request.path)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    return _launch("junk", f"查找垃圾文件 {root}", str(root), request.model_dump(), junk.run_junk_scan)
+
+
+@app.post("/api/virtual/organize")
+def start_virtual(request: VirtualRequest):
+    """整理预览：只生成「假想整理后」的结构，不动任何文件。"""
+    try:
+        root = fsutil.resolve_dir(request.path)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    mode = next((item for item in config.VIRTUAL_GROUP_MODES if item["id"] == request.group_by), None)
+    if mode is None:
+        raise HTTPException(status_code=400, detail=f"不支持的分组方式：{request.group_by}")
+    title = f"{mode['label']}预览 {root}"
+    return _launch("virtual", title, str(root), request.model_dump(), virtual.run_virtual)
+
+
+@app.post("/api/virtual/export")
+def export_virtual(request: VirtualExportRequest):
+    """把预览清单导出成 CSV（只写报表文件，不碰被扫描的文件）。"""
+    try:
+        return virtual.export_manifest(request.root, request.group_by, request.items)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+
+
+@app.post("/api/projects/scan")
+def start_project_scan(request: ProjectRequest):
+    """项目雷达：识别项目目录，统计体积与活跃度，只读。"""
+    try:
+        root = fsutil.resolve_dir(request.path)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    return _launch("projects", f"项目雷达 {root}", str(root), request.model_dump(), projects.run_project_scan)
+
+
+# ---------------------------------------------------------------------------
+# 执行
+# ---------------------------------------------------------------------------
+
+@app.post("/api/migrate")
+def start_migrate(request: MigrateRequest):
+    try:
+        source = fsutil.resolve_dir(request.source_dir)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    title = ("规划迁移 " if request.dry_run else "执行迁移 ") + f"{source} → {request.target_dir}"
+    return _launch("migrate", title, str(source), request.model_dump(), migrate.run_migrate)
+
+
+@app.post("/api/clean")
+def start_clean(request: CleanRequest):
+    if not request.items:
+        raise HTTPException(status_code=400, detail="没有需要清理的项目")
+    return _launch("clean", f"清理 {len(request.items)} 个项目", "", request.model_dump(), clean.run_clean)
+
+
+@app.post("/api/backup")
+def start_backup(request: BackupRequest):
+    try:
+        source = fsutil.resolve_dir(request.source_dir)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    return _launch("backup", f"备份 {source}", str(source), request.model_dump(), backup.run_backup)
+
+
+# ---------------------------------------------------------------------------
+# 回收站
+# ---------------------------------------------------------------------------
+
+@app.get("/api/trash")
+def get_trash():
+    return clean.list_trash()
+
+
+@app.post("/api/trash/restore")
+def restore_trash(request: TrashRequest):
+    try:
+        return clean.restore_trash(request.ids)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+
+
+@app.post("/api/trash/purge")
+def purge_trash(request: TrashRequest):
+    try:
+        return clean.purge_trash(request.ids)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+
+
+# ---------------------------------------------------------------------------
+# 日志
+# ---------------------------------------------------------------------------
+
+@app.get("/api/logs")
+def get_logs():
+    logs = store.read_logs()
+    return {"logs": logs, "count": len(logs), "source": config.LOG_FILE.name}
+
+
+@app.post("/api/logs/export")
+def export_logs():
+    logs = store.read_logs()
+    folder = config.STATE_DIR / "reports"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"filepilot_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    lines = ["FilePilot Lite 操作日志", f"导出时间：{fsutil.now_iso()}", f"记录数：{len(logs)}", ""]
+    for item in logs:
+        lines.append(f"[{item.get('time')}] {item.get('type')} · {item.get('result')} · {item.get('path') or '—'}")
+        if item.get("note"):
+            lines.append(f"    {item['note']}")
+    target.write_text("\n".join(lines), encoding="utf-8")
+    size = target.stat().st_size
+    return {
+        "success": True, "path": str(target), "size": size,
+        "size_text": fsutil.format_size(size), "count": len(logs),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Agent（唯一可能消耗 token 的部分）
+# ---------------------------------------------------------------------------
+
+@app.get("/api/agent/status")
+def agent_status():
+    return agent.status()
+
+
+@app.post("/api/agent/chat")
+def agent_chat(request: AgentRequest):
+    try:
+        return agent.chat(request.message, request.context)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/agent/query")
+def agent_query(request: AgentRequest):
+    """只读本地查询：不执行文件操作，也不调用模型。"""
+    result = agent.query_local(request.message)
+    if result is None:
+        raise HTTPException(status_code=400, detail="暂时无法用本地规则理解这个查询")
+    return result
+
+
+@app.get("/api/agent/memory/{conversation_id}")
+def get_agent_memory(conversation_id: str):
+    return {"conversation_id": conversation_id, "messages": agent.load_memory(conversation_id)}
+
+
+@app.delete("/api/agent/memory/{conversation_id}")
+def clear_agent_memory(conversation_id: str):
+    agent.clear_memory(conversation_id)
+    return {"success": True, "conversation_id": conversation_id}
+
+
+@app.get("/api/agent/conversations")
+def list_agent_conversations():
+    """历史会话列表（按最近活跃倒序）。"""
+    return {"conversations": agent.list_conversations()}
+
+
+@app.post("/api/agent/conversations/{conversation_id}/title")
+def rename_agent_conversation(conversation_id: str, request: ConversationTitleRequest):
+    """重命名会话；传空标题则退回按首条消息自动生成。"""
+    return agent.set_conversation_title(conversation_id, request.title)
+
+
+@app.post("/api/agent/chat/stream")
+def agent_chat_stream(request: AgentRequest):
+    """流式版：phase / delta / done / error 四种事件，前端逐块渲染。"""
+    def event_source():
         try:
-            if target.exists():
-                source.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(target), str(source))
-                restored += 1
-        except OSError as exc:
-            errors.append(str(exc))
-    return {"success": not errors, "moved_count": restored, "errors": errors}
+            for event in agent.stream_chat(request.message, request.context):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except (ValueError, RuntimeError) as exc:
+            payload = {"type": "error", "message": str(exc)}
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
-@app.post("/api/export-report")
-def export_report(request: PathRequest):
-    root = safe_path(request.path, must_exist=True)
-    result = scan_path(root)
-    report_dir = root / "reports"
-    report_dir.mkdir(exist_ok=True)
-    report_path = report_dir / f"filepilot_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    lines = ["FilePilot Lite 扫描报告", f"目录: {result['root']}", f"生成时间: {result['scan_time']}", f"文件总数: {result['total_files']}", f"目录总数: {result['total_dirs']}", f"总大小: {result['total_size_text']}", "", "文件分类:"]
-    lines.extend(f"- {item['name']}: {item['count']} 个, {item['size_text']}" for item in result["category_stats"])
-    lines.append("\n大文件:")
-    lines.extend(f"- {item['path']} ({item['size_text']})" for item in result["large_files"])
-    report_path.write_text("\n".join(lines), encoding="utf-8")
-    size = report_path.stat().st_size
-    write_log("report", "成功", str(root), str(report_path))
-    return {"success": True, "report_path": str(report_path), "size": size, "size_text": format_size(size), "created_at": now_iso()}
+@app.get("/api/settings/safety")
+def get_safety_settings():
+    return permissions.describe()
 
 
-@app.post("/api/ai/scan-advice")
-def scan_advice(request: AdviceRequest):
-    summary = request.summary or {}
-    total = int(summary.get("total_files") or 0)
-    large = len(summary.get("large_files") or [])
-    overview = f"本次扫描发现 {total} 个文件。"
-    actions = ["先处理重复文件，再整理大文件。", "备份重要目录后再执行移动操作。"]
-    if large:
-        actions.insert(0, f"发现 {large} 个大文件，建议优先确认是否需要长期保留。")
-    return {"overview": overview, "priority_actions": actions, "risks": ["移动前请确认目标目录有足够空间。"], "next_steps": ["导出报告留档", "完成备份后再整理"], "generated_at": now_iso(), "usage": {"total_tokens": 0}, "question": request.question}
+@app.post("/api/settings/safety")
+def update_safety_settings(request: SafetySettingsRequest):
+    """切换权限档位。切到「完全访问」必须显式 confirm，否则拒绝。"""
+    try:
+        return permissions.set_mode(request.mode, request.confirm)
+    except (ValueError, PermissionError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/settings/agent")
+def get_agent_settings():
+    """只回掩码与状态，绝不回传完整 key。"""
+    return agent.settings_view()
+
+
+@app.post("/api/settings/agent")
+def update_agent_settings(request: AgentSettingsRequest):
+    """保存/清除模型配置。api_key 或 model 传空串表示清除该字段。
+
+    只写 .filepilot/settings.json —— 配方与任务记录都不受影响。
+    """
+    return agent.update_settings(request.api_key, request.model)
+
+
+@app.get("/api/recipes")
+def get_recipes():
+    return {"recipes": store.read_recipes()}
+
+
+@app.post("/api/recipes")
+def create_recipe(request: RecipeRequest):
+    recipes = store.read_recipes()
+    recipes.append({
+        "name": request.name,
+        "message": request.message,
+        "action": request.action,
+        "created_at": fsutil.now_iso(),
+    })
+    store.save_recipes(recipes)
+    return {"success": True, "count": len(recipes)}
+
+
+@app.delete("/api/recipes/{index}")
+def delete_recipe(index: int):
+    recipes = store.read_recipes()
+    if index < 0 or index >= len(recipes):
+        raise HTTPException(status_code=404, detail="配方不存在")
+    removed = recipes.pop(index)
+    store.save_recipes(recipes)
+    return {"success": True, "removed": removed, "count": len(recipes)}
+
+
+# ---------------------------------------------------------------------------
+# 本地定时维护
+# ---------------------------------------------------------------------------
+
+@app.get("/api/schedules")
+def get_schedules():
+    return {"schedules": scheduler.list_schedules()}
+
+
+@app.post("/api/schedules")
+def create_schedule(request: ScheduleRequest):
+    try:
+        return scheduler.new_schedule(request.name, request.kind, request.params, request.interval_minutes, request.next_run_at)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/schedules/{schedule_id}")
+def delete_schedule(schedule_id: str):
+    if not any(item["id"] == schedule_id for item in scheduler.list_schedules()):
+        raise HTTPException(status_code=404, detail="定时任务不存在")
+    scheduler.remove_schedule(schedule_id)
+    return {"success": True, "id": schedule_id}
+
+
+# 发行版由后端直接托管前端静态文件；开发环境没有 web/ 时不影响 API。
+if WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=False)

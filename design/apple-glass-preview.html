@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="zh-CN" data-page-node-id="hqfnGsadEluEYrlByz7tW5">
+<head data-page-node-id="JS3jPZ4LohwGX9pNRBcEjq">
+<meta charset="utf-8" data-page-node-id="6yxhlgpDQDPZD5UsFZQENY">
+<meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="u4Zo7UIJKH8sPGj9hMXF8P">
+<title>FilePilot Lite · 苹果毛玻璃风格预览</title>
+<style>
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI Variable Text", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition: background .35s ease;
+}
+
+body.os {
+  --bg:          #f4f7fa;
+  --surface:     #ffffff;
+  --surface-alt: #fafbfd;
+  --inset:       #f3f6f9;
+  --hairline:    rgba(31, 42, 55, .09);
+  --hairline-2:  rgba(31, 42, 55, .14);
+  --label:       #1f2a37;
+  --label-2:     #556273;
+  --label-3:     #7a8696;
+  --accent:      #1768ac;
+  --accent-soft: #e8f1f8;
+  --success:     #177a5f;
+  --success-soft:#e6f3ee;
+  --radius-win:  20px;
+  --radius-card: 16px;
+  --radius-ctl:  12px;
+  --blur:        none;
+  --shadow:      0 6px 18px rgba(15, 23, 42, .04);
+  --top-sheen:   none;
+  --btn-border:  1px solid var(--hairline);
+}
+
+body.glass {
+  --bg:
+    radial-gradient(1100px 760px at 10% 4%,  rgba(186, 214, 255, .85) 0%, transparent 58%),
+    radial-gradient(980px 700px at 92% 10%,  rgba(255, 209, 226, .72) 0%, transparent 56%),
+    radial-gradient(900px 820px at 74% 96%,  rgba(196, 240, 219, .72) 0%, transparent 58%),
+    radial-gradient(820px 640px at 16% 92%,  rgba(255, 232, 194, .70) 0%, transparent 60%),
+    linear-gradient(158deg, #f4f7fc 0%, #eaeff8 100%);
+  --surface:     rgba(255, 255, 255, .60);
+  --surface-alt: rgba(255, 255, 255, .42);
+  --inset:       rgba(120, 120, 128, .10);
+  --hairline:    rgba(60, 60, 67, .12);
+  --hairline-2:  rgba(60, 60, 67, .20);
+  --label:       #1c1c1e;
+  --label-2:     rgba(60, 60, 67, .64);
+  --label-3:     rgba(60, 60, 67, .44);
+  --accent:      #007aff;
+  --accent-soft: rgba(0, 122, 255, .13);
+  --success:     #248a3d;
+  --success-soft:rgba(52, 199, 89, .18);
+  --radius-win:  26px;
+  --radius-card: 22px;
+  --radius-ctl:  10px;
+  --blur:        saturate(180%) blur(28px);
+  --shadow:      0 14px 44px rgba(28, 40, 64, .11), 0 1px 2px rgba(28, 40, 64, .06);
+  --top-sheen:   inset 0 1px 0 rgba(255, 255, 255, .70);
+  --btn-border:  1px solid transparent;
+}
+
+body { background: var(--bg); background-attachment: fixed; color: var(--label); }
+
+.wrap { max-width: 1440px; margin: 0 auto; padding: 16px 18px 40px; }
+
+.preview-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-size: 12px; color: var(--label-2); }
+.seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--inset); border-radius: 999px; }
+.seg button {
+  border: 0; cursor: pointer; font: inherit; font-size: 12px; padding: 6px 14px; border-radius: 999px;
+  background: transparent; color: var(--label-2);
+}
+.seg button[aria-selected="true"] { background: var(--surface); color: var(--label); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+
+.app { display: grid; grid-template-columns: 262px minmax(0, 1fr); gap: 18px; align-items: start; }
+
+.sidebar, .topbar, .card, .metric {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow), var(--top-sheen);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+}
+
+.sidebar { border-radius: var(--radius-win); padding: 16px; position: sticky; top: 16px; }
+
+.brand { display: flex; align-items: center; gap: 11px; padding: 4px 6px 14px; border-bottom: 1px solid var(--hairline); }
+.brand__badge {
+  width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+  background: var(--accent); color: #fff;
+}
+.brand__badge svg { width: 18px; height: 18px; }
+.brand strong { display: block; font-size: 14px; font-weight: 500; letter-spacing: -.01em; }
+.brand span { display: block; font-size: 11px; color: var(--label-3); margin-top: 2px; }
+
+.nav-title { font-size: 11px; color: var(--label-3); padding: 16px 8px 8px; letter-spacing: .02em; }
+.nav a {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px;
+  text-decoration: none; color: var(--label); margin-bottom: 2px;
+}
+.nav a svg { width: 17px; height: 17px; flex: none; color: var(--label-2); }
+.nav a strong { display: block; font-size: 13px; font-weight: 500; }
+.nav a small { display: block; font-size: 11px; color: var(--label-3); margin-top: 1px; }
+.nav a.on { background: var(--accent-soft); }
+.nav a.on svg, .nav a.on strong { color: var(--accent); }
+.nav a.on small { color: var(--accent); opacity: .75; }
+
+.svc { margin-top: 18px; padding: 11px 12px; border-radius: 12px; background: var(--inset); }
+.svc__row { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.svc__dot { width: 7px; height: 7px; border-radius: 50%; background: #34c759; }
+.svc small { display: block; margin-top: 4px; font-size: 11px; color: var(--label-3); line-height: 1.5; }
+
+.topbar {
+  border-radius: var(--radius-card); padding: 15px 20px; margin-bottom: 18px;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+}
+.eyebrow { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--label-3); font-weight: 500; }
+.topbar h1 { margin: 4px 0 0; font-size: 26px; font-weight: 500; letter-spacing: -.03em; }
+.topbar p { margin: 5px 0 0; font-size: 13px; color: var(--label-2); }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: 999px;
+  background: var(--surface-alt); border: 1px solid var(--hairline); font-size: 12px; color: var(--label-2);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+}
+.chip b { font-weight: 500; color: var(--label); }
+
+.page-head { padding: 2px 2px 20px; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.page-head h2 { margin: 0; font-size: 32px; font-weight: 500; letter-spacing: -.035em; }
+.page-head p { margin: 7px 0 0; font-size: 13.5px; color: var(--label-2); max-width: 720px; line-height: 1.6; }
+.pills { display: flex; gap: 8px; margin-top: 12px; }
+.pill { padding: 7px 12px; border-radius: 999px; background: var(--surface-alt); border: 1px solid var(--hairline); font-size: 12px; color: var(--label-2); }
+
+.btn {
+  border: var(--btn-border); cursor: pointer; font: inherit; font-size: 13px; font-weight: 500;
+  padding: 9px 16px; border-radius: var(--radius-ctl); background: var(--inset); color: var(--label);
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.btn svg { width: 15px; height: 15px; }
+.btn.primary { background: var(--accent); color: #fff; border-color: transparent; box-shadow: 0 1px 2px rgba(0,0,0,.10); }
+
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+.metric { border-radius: var(--radius-card); padding: 16px 18px; }
+.metric__label { font-size: 12px; color: var(--label-3); font-weight: 500; }
+.metric__value { margin-top: 9px; font-size: 27px; font-weight: 500; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+
+.grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .85fr); gap: 16px; margin-bottom: 16px; }
+.card { border-radius: var(--radius-card); padding: 20px; }
+.card h3 { margin: 0; font-size: 15px; font-weight: 500; letter-spacing: -.01em; }
+.card .sub { margin: 5px 0 16px; font-size: 12.5px; color: var(--label-3); line-height: 1.6; }
+
+.bar-row { padding: 13px 15px; border-radius: 13px; background: var(--surface-alt); border: 1px solid var(--hairline); }
+.bar-row__head { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 9px; }
+.bar-row__head strong { font-weight: 500; }
+.bar-row__head span { color: var(--label-3); font-size: 12px; }
+.bar { height: 7px; border-radius: 999px; background: var(--inset); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+
+.filters { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-bottom: 9px; }
+.ctl {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 36px; padding: 0 12px;
+  border-radius: var(--radius-ctl); background: var(--surface-alt); border: 1px solid var(--hairline);
+  font-size: 13px; color: var(--label-2);
+}
+.ctl.wide { grid-column: 1 / -1; }
+.ctl svg { width: 14px; height: 14px; color: var(--label-3); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th {
+  text-align: left; padding: 0 14px 10px; font-size: 11px; font-weight: 500; color: var(--label-3);
+  border-bottom: 1px solid var(--hairline);
+}
+tbody td { padding: 14px; border-bottom: 1px solid var(--hairline); color: var(--label-2); }
+tbody tr:last-child td { border-bottom: 0; }
+td.mono { font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; color: var(--label-2); }
+.tag { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+.tag.ok { background: var(--success-soft); color: var(--success); }
+.tag.info { background: var(--accent-soft); color: var(--accent); }
+
+@media (max-width: 1100px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar { position: static; }
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body class="glass" data-page-node-id="d6s5zzDoLPpjtbsVmekVNl">
+<div class="wrap" data-page-node-id="H2Gir2Lm4GNyr4h25IdjDU">
+
+  <div class="preview-bar" data-page-node-id="ZUrUZURuK0GZMH0S9WwMKo">
+    <span data-page-node-id="XlHCw1Xxg3HtsE5qvbce3R">预览模式</span>
+    <div class="seg" id="seg" data-page-node-id="wYNFPLRXKd4B5pPLaSSn6t">
+      <button data-mode="glass" aria-selected="true" data-page-node-id="S3XUzMrSUrlLlasKmQlSvy">苹果毛玻璃</button>
+      <button data-mode="os" aria-selected="false" data-page-node-id="8CGZsXJNrJ2MATsjmcjmaj">当前风格</button>
+    </div>
+    <span id="hint" data-page-node-id="RVfurIDcxAiVXiB0z56l19">毛玻璃需要背后有内容才看得出来 —— 注意背景的柔和色块，以及卡片边缘那道高光。</span>
+  </div>
+
+  <div class="app" data-page-node-id="y1kLq3KHIkvjuIzqG9WZ8g">
+
+    <aside class="sidebar" data-page-node-id="TJcwGd3L1W7TDDlomRz2rR">
+      <div class="brand" data-page-node-id="x0B9FDjtpJ5x1OpYkecj9p">
+        <div class="brand__badge" data-page-node-id="E0PSF7ljkFbimyCdcmx1DZ">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="4WByoEtD45yRkaZ6iqRl0t"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l1.6 2h8.2A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" data-page-node-id="03H8jrkicC7fyfGfHB20hl"/></svg>
+        </div>
+        <div data-page-node-id="GG7TMA3x2WBuESOvZGSGKt">
+          <strong data-page-node-id="UM5zURoNc0giSNczaZLdEO">FilePilot Lite</strong>
+          <span data-page-node-id="bI4KTezfApFMRgZ8Xiu6sb">本地文件工作台</span>
+        </div>
+      </div>
+
+      <div class="nav-title" data-page-node-id="wyteSVZCemixIfqkm862SM">功能导航</div>
+      <nav class="nav" data-page-node-id="52SXCdJ2Bak7na1NceB7y9">
+        <a href="#" data-page-node-id="5XCaa4nFv70XX1u7JCQbKi">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="8WrzzzO0SkeUDlvbR2q5xA"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z" data-page-node-id="vIH9bjq6bIwS8DmiOYnGiP"/></svg>
+          <div data-page-node-id="srkeX6pvFG7iURRC68IseM"><strong data-page-node-id="pvPDF550ZljKuWkTn9queZ">工作台</strong><small data-page-node-id="jAjUIlTOKBBx6Huyd9wBy4">总览与最近动作</small></div>
+        </a>
+        <a href="#" data-page-node-id="YOXxOa45Fzfokh8R3H5rFu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="RCCDdueBIC7t4F06nIFcwa"><circle cx="11" cy="11" r="6.5" data-page-node-id="EWjWzj29RVRqcHO4JUYieP"/><path d="m16 16 4.5 4.5" data-page-node-id="eilq5AG7APfvyqAGSXajai"/></svg>
+          <div data-page-node-id="CIO0yE8YP9amMMr0DVdYQc"><strong data-page-node-id="M3mrUWb16we2pb3SrxAmXv">扫描分析</strong><small data-page-node-id="LXG5oALWYKjBR4Wv3ok0x9">扫描与大文件</small></div>
+        </a>
+        <a href="#" data-page-node-id="Mb2yw4bxAxjznXYqSCm3Eo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="r2Ny9sW7tDDCMAj16upPy7"><rect x="9" y="3" width="12" height="14" rx="2" data-page-node-id="dtYHRGExQq5BtuEcV9R2Rr"/><path d="M15 21H5a2 2 0 0 1-2-2V7" data-page-node-id="PpZ2dkCa0u9uZtM4TfbQMn"/></svg>
+          <div data-page-node-id="WYvlRHmUceqBZ8RufKT6Fd"><strong data-page-node-id="XdKonfJsUNqJvRLfbLl82F">重复文件</strong><small data-page-node-id="eps0FAsljGIojG2HE56JGR">查重与处理</small></div>
+        </a>
+        <a href="#" data-page-node-id="aCp2bb4GTbBbBDEBASrKvW">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="7n1O1Ae8i9Pom49djz3ZOd"><path d="M7 4v13M7 17l-3-3M7 17l3-3M17 20V7M17 7l-3 3M17 7l3 3" data-page-node-id="35rcWUrmkhcjHskP1o6Vrl"/></svg>
+          <div data-page-node-id="xfzzMn7kZhWMhgumkfj2YZ"><strong data-page-node-id="lA4mwelnkdzL68qA5ZOOQS">文件整理</strong><small data-page-node-id="cllPdoqBh9cfIgGDYx7CfC">预览后执行</small></div>
+        </a>
+        <a href="#" data-page-node-id="bzjQuthFavQvYspsxZVi5j">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="kEaos8FOs2mHx9EQbnXibe"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l1.6 2h8.2A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" data-page-node-id="NQBIpLdBgs4iEEbuPzEZrH"/><path d="M12 11v5m0-5-2 2m2-2 2 2" data-page-node-id="iAt2RWDEpia4ci9pGAaO2o"/></svg>
+          <div data-page-node-id="uQnPGRjbWVK9G0MDgAgHEc"><strong data-page-node-id="7UpLQ7H47ZzmCtMIXcflHN">项目备份</strong><small data-page-node-id="s1kHJBJv42PNcbwASE6rDi">生成 ZIP 快照</small></div>
+        </a>
+        <a href="#" data-page-node-id="lprQxgjCWw3ecFaKCSIQSs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="PBdXOLymRVEVr2YkIzoRr6"><path d="M6 3h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" data-page-node-id="jGLUkWa5ZmNYReAsgPUsBl"/><path d="M14 3v5h5" data-page-node-id="WNYPVVMWlwHdKkU2AnM8b4"/></svg>
+          <div data-page-node-id="DLPXoG507ydXeDeLRlBDmj"><strong data-page-node-id="sFjClb63lmGQvtvMOJacGC">报告导出</strong><small data-page-node-id="gGNA2pbzPm5REzJAGTod6o">输出文本结果</small></div>
+        </a>
+        <a href="#" class="on" data-page-node-id="2IkT2ZTvCpUiRajaEgLk1C">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="ggbeRKkNFBjlOioFatx6wO"><path d="M4 6h16M4 12h16M4 18h10" data-page-node-id="WjZRQU1PxsWBszEYN0d1LC"/></svg>
+          <div data-page-node-id="tBnXBRjFCafJo71YEIzaru"><strong data-page-node-id="Y446bBRVea28jlZv02BW1U">操作日志</strong><small data-page-node-id="YUsX95k9kC6fbSeD6HIu08">回看历史记录</small></div>
+        </a>
+      </nav>
+
+      <div class="svc" data-page-node-id="T92veRugYvAA6IvLaMmsJM">
+        <div class="svc__row" data-page-node-id="mUXKkfLTt924sxk2B6S0UN"><span class="svc__dot" data-page-node-id="aAv42t9pl0LYIiEf8O9wUT"></span><strong style="font-weight:500" data-page-node-id="3excVJe8cmGzGy04bk9gbQ">本地服务正常</strong></div>
+        <small data-page-node-id="yDhWKR3wdEoEjGFMa6HDq0">扫描、整理、备份与 AI 分析均可使用</small>
+      </div>
+    </aside>
+
+    <main data-page-node-id="dWhlOLHe54QKecBFBEuLTk">
+      <header class="topbar" data-page-node-id="1oR3PFGfFyX5im3G9MebUj">
+        <div data-page-node-id="EiE5lCcHmCSdupfKMbhkia">
+          <div class="eyebrow" data-page-node-id="sHAKMTMd5lv8Oi8iE4SkAX">FilePilot Lite</div>
+          <h1 data-page-node-id="efWT30QjaZJGTS40Y8T6Fr">操作日志</h1>
+          <p data-page-node-id="ks2vKTsiZwVg1GOfzvuiH1">按时间回看每一次真实本地操作。</p>
+        </div>
+        <div class="chips" data-page-node-id="YeJTSzuwBFznXw88cgsJFL">
+          <span class="chip" data-page-node-id="sjm3s0bizXKK4VVmNHzw8c">10月1日 星期四</span>
+          <span class="chip" data-page-node-id="2OhZVAKJYexfCUaBP8xuSI"><span class="svc__dot" data-page-node-id="U7Od4ppi1K2RNyNbHate27"></span>后端已连接 · <b data-page-node-id="R76hcfLFqDlFcREgutbVGF">13:46</b></span>
+        </div>
+      </header>
+
+      <div class="page-head" data-page-node-id="MfYBtHajNscV4pKas3z39X">
+        <div data-page-node-id="D9EB33GRr4HATTq6Ofhqqs">
+          <div class="eyebrow" data-page-node-id="p1rGBw8sIkREZBnq178aeW">审计</div>
+          <h2 data-page-node-id="80xYqSCxgILwuhrzznWDUG">操作日志</h2>
+          <p data-page-node-id="wRWpStagrwHpnWV1rKAfEy">所有真实动作都在这里回看。先缩小范围，再看细节，能更快定位某次扫描、整理、备份或 AI 分析。</p>
+          <div class="pills" data-page-node-id="BdsYnU0kxSBcERLGDICGY6">
+            <span class="pill" data-page-node-id="uhz84xQ2Kx70tF7qEwXZ75">来源：activity.jsonl</span>
+            <span class="pill" data-page-node-id="bxWepmYeh8cHKyJ7pTNmnd">最多显示最近 50 条</span>
+          </div>
+        </div>
+        <button class="btn" data-page-node-id="u35IsPzCeW9vkGUgMLJi3P">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="5THcvcbZsLwTQiBxf2DNGT"><path d="M20 12a8 8 0 1 1-2.4-5.7" data-page-node-id="YIhq2qsphuXjTIeGIXjv6j"/><path d="M20 4v4h-4" data-page-node-id="IDhLz83bYyUjyXU0BPWs1U"/></svg>
+          刷新
+        </button>
+      </div>
+
+      <section class="metrics" data-page-node-id="EMHrwqApyJHDvvFik3Jmg6">
+        <div class="metric" data-page-node-id="VREUK8Lrxg1tHcQ8VbMN99"><div class="metric__label" data-page-node-id="CAEbHUCp3tRvOCTRDus3d3">记录数</div><div class="metric__value" data-page-node-id="lFuYNyh2J2RIbdC9xs0n6t">1</div></div>
+        <div class="metric" data-page-node-id="AGF8p4CmNm1asniwcIbdjb"><div class="metric__label" data-page-node-id="7TSQlyJOV3Q3tj2CIpZPA8">成功率</div><div class="metric__value" data-page-node-id="85pQ0eQtoZ35vIl860RNzz">100.0%</div></div>
+        <div class="metric" data-page-node-id="Fo0uhiz3nKPBYWmKmor9ZB"><div class="metric__label" data-page-node-id="EyyNlqbuHXqdYNEsfPj11H">扫描次数</div><div class="metric__value" data-page-node-id="9FamTJl4S1XXRy9ePjpcAH">1</div></div>
+        <div class="metric" data-page-node-id="YV8ROxZkKYBQAOeYwSZLwc"><div class="metric__label" data-page-node-id="PFNiuEj8ILfuwyYxvC8FkP">AI 分析次数</div><div class="metric__value" data-page-node-id="ru0FG8B9KJslyTddLFbrF4">0</div></div>
+      </section>
+
+      <section class="grid" data-page-node-id="kyzhshShUvQ4615RX4W3yJ">
+        <article class="card" data-page-node-id="x9e74WJEiqFTyxfBiKPilN">
+          <h3 data-page-node-id="h4TPT8RtxGtOHE0P7doFOE">动作分布</h3>
+          <p class="sub" data-page-node-id="MRV25vRG108yvIt9N87lZG">先看最近日志里哪几类动作最常出现。</p>
+          <div class="bar-row" data-page-node-id="C1uCFgHGyTHw9Wylx9OJOh">
+            <div class="bar-row__head" data-page-node-id="is0HXAL4rr2woRpwqTCqRy"><strong data-page-node-id="ZH49HoHaexznPLhKDArgGn">文件扫描</strong><span data-page-node-id="VxXMTFM9gbDNF13BGttkCF">1 次</span></div>
+            <div class="bar" data-page-node-id="wGYyzMApkaQa5nHacrCHhc"><i style="width:100%" data-page-node-id="zn5yArToT6inCK4l9HRYs8"></i></div>
+          </div>
+        </article>
+
+        <article class="card" data-page-node-id="YMzcJNAZpCdp71PIdczfPy">
+          <h3 data-page-node-id="tbD3TYrhStZutCmTR0hdwd">筛选</h3>
+          <p class="sub" data-page-node-id="FPmNCesqVnkZNXG5ggiJNY">先筛类型和结果，再搜路径或备注，定位会更快。</p>
+          <div class="filters" data-page-node-id="oAS4jnNVDa9xorOqAjbIoZ">
+            <div class="ctl" data-page-node-id="oDONbkW5CZ5Aos2ZPUAoIy"><span data-page-node-id="fj9D6vyquHOhP2asNZjbjk">全部类型</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" data-page-node-id="qtAQhAsvlEze2TJoVQw6JJ"><path d="m7 10 5 5 5-5" data-page-node-id="POk4pMRir4NYFDPbXPUc1q"/></svg>
+            </div>
+            <div class="ctl" data-page-node-id="pemIcuAoutfwt03XYCaLSW"><span data-page-node-id="vxHeDdnkcRQJrxC7tEHHOw">全部结果</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" data-page-node-id="o50JdPhUYDdD5KeHauMlDE"><path d="m7 10 5 5 5-5" data-page-node-id="MDoJ9JWx9vzFl73RKht0qS"/></svg>
+            </div>
+            <div class="ctl wide" data-page-node-id="7a4fOGEUdfcIqk9caCV6RX">
+              <span data-page-node-id="jNG8OqcfaaULbYLGaOBZTz">搜索路径或备注</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" data-page-node-id="r4EHCIGk1JyjXdiorg4iyo"><circle cx="11" cy="11" r="6.5" data-page-node-id="JlX4TiUrdjqAP10HQVKRaY"/><path d="m16 16 4.5 4.5" data-page-node-id="JynS68YaRK7U0HGMNGLB8m"/></svg>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="card" data-page-node-id="dsE5UIOcojetgaPiGI9MF0">
+        <h3 data-page-node-id="oQsoE7lQSLpbxzf5Zkxtz6">日志明细</h3>
+        <p class="sub" data-page-node-id="6LSfeW8oFZKiAvxBKx41Ks">保留每一次真实操作的时间、路径、结果和简要说明。</p>
+        <table data-page-node-id="TJPSHpCp3oo6cQ9ikPFAAi">
+          <thead data-page-node-id="x7hkyq00gRrbrSpMiMn09q">
+            <tr data-page-node-id="wkq6BgRAtOUWksTBlsRj2B"><th style="width:190px" data-page-node-id="8l8QSl4C4LRHBoXXVlGuDu">操作时间</th><th style="width:110px" data-page-node-id="Es8IDW4WDTTxd1piRIPgb5">操作类型</th><th data-page-node-id="cPTCyOXHVN0rI0h4J4ffky">路径</th><th style="width:96px" data-page-node-id="dPX0fSLgIgN2rL7gexamQZ">结果</th></tr>
+          </thead>
+          <tbody data-page-node-id="IZwbMHYqbHz4YmqmpnA8Gm">
+            <tr data-page-node-id="DqoVwgakJC1kcN7E1oBexZ">
+              <td data-page-node-id="DXKf1PRbASn8Do3n4tQjGa">2026-07-13 17:45:21</td>
+              <td data-page-node-id="dzax1uFPe39KYxau6kApXP"><span class="tag info" data-page-node-id="67jTLyetLX5HB0TNG3MuKe">文件扫描</span></td>
+              <td class="mono" data-page-node-id="6FV2WLmWy6bkuOaVrZulqo">D:\FilePilotLite\frontend\src</td>
+              <td data-page-node-id="zkFrAVnjHmyGNw2pw0f12e"><span class="tag ok" data-page-node-id="fLFlghfqLi83IUJWExf7sD">成功</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+const seg = document.getElementById('seg');
+const hint = document.getElementById('hint');
+const hints = {
+  glass: '毛玻璃需要背后有内容才看得出来 —— 注意背景的柔和色块，以及卡片边缘那道高光。',
+  os: '这是你现在的风格：纯白卡片、细描边、几乎无阴影，背景是极淡的冷灰。',
+};
+seg.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const mode = btn.dataset.mode;
+  document.body.className = mode;
+  [...seg.children].forEach(b => b.setAttribute('aria-selected', String(b === btn)));
+  hint.textContent = hints[mode];
+});
+</script>
+</body>
+</html>

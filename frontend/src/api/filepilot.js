@@ -19,93 +19,160 @@ api.interceptors.response.use(
   },
 )
 
-const SCAN_CACHE_KEY = 'filepilot:lastScan'
-const BACKUP_CACHE_KEY = 'filepilot:lastBackup'
-const DUPLICATE_CACHE_KEY = 'filepilot:lastDuplicates'
-const ORGANIZER_PREVIEW_CACHE_KEY = 'filepilot:organizerPreview'
-const ORGANIZER_RESULT_CACHE_KEY = 'filepilot:organizerResult'
+const unwrap = async promise => (await promise).data
 
-function writeCache(key, value) {
-  try { sessionStorage.setItem(key, JSON.stringify(value)) } catch { /* 浏览器禁用存储时仍可正常调用 API */ }
+/* ---------------- 基础 ---------------- */
+export const healthCheck = () => unwrap(api.get('/health'))
+export const getConfig = () => unwrap(api.get('/config'))
+export const getOverview = () => unwrap(api.get('/overview'))
+
+/* ---------------- 任务 ---------------- */
+export const listJobs = (limit = 50) => unwrap(api.get('/jobs', { params: { limit } }))
+export const getJob = jobId => unwrap(api.get(`/jobs/${jobId}`))
+/* 取消任务时带上调用栈：后端会把它写进审计日志，
+   事后一眼就能看出这次取消是「用户点了按钮」还是「某处代码自动调的」。 */
+export function cancelJob(jobId, reason = '') {
+  const frames = (new Error().stack || '')
+    .split('\n')
+    .slice(2, 5)
+    .map(line => line.trim().replace(/^at\s+/, ''))
+    .join(' ← ')
+  return unwrap(api.post(`/jobs/${jobId}/cancel`, { reason: reason ? `${reason} @ ${frames}` : frames }))
 }
+export const rollbackJob = jobId => unwrap(api.post(`/jobs/${jobId}/rollback`))
 
-function clearCache(key) {
-  try { sessionStorage.removeItem(key) } catch { /* 忽略浏览器存储异常 */ }
-}
-
-function readCache(key) {
-  try {
-    const value = sessionStorage.getItem(key)
-    return value ? JSON.parse(value) : null
-  } catch {
-    return null
+export function subscribeJob(jobId, onUpdate) {
+  const base = api.defaults.baseURL
+  const source = new EventSource(`${base}/jobs/${jobId}/stream`)
+  source.onmessage = event => {
+    try {
+      onUpdate(JSON.parse(event.data))
+    } catch {
+      /* 忽略无法解析的心跳帧 */
+    }
   }
+  source.onerror = () => {
+    source.close()
+    onUpdate(null)
+  }
+  return () => source.close()
 }
 
-export async function healthCheck() {
-  return (await api.get('/health')).data
+/* ---------------- 分析 ---------------- */
+export const startScan = payload => unwrap(api.post('/scan', payload))
+export const startTree = payload => unwrap(api.post('/tree', payload))
+export const startDuplicateScan = payload => unwrap(api.post('/duplicates/scan', payload))
+export const startJunkScan = payload => unwrap(api.post('/junk/scan', payload))
+export const startVirtual = payload => unwrap(api.post('/virtual/organize', payload))
+export const exportVirtual = payload => unwrap(api.post('/virtual/export', payload))
+export const startProjectScan = payload => unwrap(api.post('/projects/scan', payload))
+
+/* ---------------- 执行 ---------------- */
+export const startMigrate = payload => unwrap(api.post('/migrate', payload))
+export const startClean = payload => unwrap(api.post('/clean', payload))
+export const startBackup = payload => unwrap(api.post('/backup', payload))
+
+/* ---------------- 回收站 ---------------- */
+export const getTrash = () => unwrap(api.get('/trash'))
+export const restoreTrash = ids => unwrap(api.post('/trash/restore', { ids }))
+export const purgeTrash = ids => unwrap(api.post('/trash/purge', { ids }))
+
+/* ---------------- 日志 ---------------- */
+export const getLogs = () => unwrap(api.get('/logs'))
+export const exportLogs = () => unwrap(api.post('/logs/export'))
+
+/* ---------------- Agent ---------------- */
+export const getAgentStatus = () => unwrap(api.get('/agent/status'))
+export const agentChat = (message, context = {}) => unwrap(api.post('/agent/chat', { message, context }))
+
+/** 读取某个会话的上下文记忆（用于重开页面后恢复对话）。 */
+export const getAgentMemory = conversationId =>
+  unwrap(api.get(`/agent/memory/${encodeURIComponent(conversationId)}`))
+
+/** 清空某个会话的上下文记忆（删除历史会话时调用）。 */
+export const clearAgentMemory = conversationId =>
+  unwrap(api.delete(`/agent/memory/${encodeURIComponent(conversationId)}`))
+
+/** 历史会话列表（标题=首条用户消息，按最近活跃倒序）。 */
+export const listAgentConversations = () => unwrap(api.get('/agent/conversations'))
+
+/** 重命名会话；传空标题则退回按首条消息自动生成。 */
+export const renameAgentConversation = (conversationId, title) =>
+  unwrap(api.post(`/agent/conversations/${encodeURIComponent(conversationId)}/title`, { title }))
+
+/**
+ * 流式对话：逐块回调，返回一个「停止」函数。
+ *
+ *   const stop = agentChatStream(msg, ctx, { onDelta, onPhase, onDone, onError, onClose })
+ *
+ * 用 fetch + ReadableStream 而不是 EventSource——EventSource 只能发 GET，
+ * 装不下 message 与 context 这两个入参。
+ */
+export function agentChatStream(message, context = {}, handlers = {}) {
+  const controller = new AbortController()
+  const baseURL = api.defaults.baseURL
+
+  const run = async () => {
+    try {
+      const response = await fetch(`${baseURL}/agent/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, context }),
+        signal: controller.signal,
+      })
+      if (!response.ok || !response.body) {
+        throw new Error(response.status === 404 ? '后端不支持流式对话，请重启本地服务' : `对话流连接失败（${response.status}）`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        const frames = buffer.split('\n\n')
+        buffer = frames.pop() || ''
+        for (const frame of frames) {
+          const line = frame.split('\n').find(item => item.startsWith('data:'))
+          if (!line) continue
+          let event
+          try {
+            event = JSON.parse(line.slice(5).trim())
+          } catch {
+            continue
+          }
+          if (event.type === 'delta') handlers.onDelta?.(event.text)
+          else if (event.type === 'phase') handlers.onPhase?.(event.text)
+          else if (event.type === 'done') handlers.onDone?.(event.payload)
+          else if (event.type === 'error') handlers.onError?.(event.message)
+        }
+      }
+    } catch (error) {
+      if (error.name !== 'AbortError') handlers.onError?.(error.message)
+    } finally {
+      handlers.onClose?.()
+    }
+  }
+
+  run()
+  return () => controller.abort()
 }
 
-export async function getAiStatus() {
-  return (await api.get('/ai/status')).data
-}
+export const getRecipes = () => unwrap(api.get('/recipes'))
+export const saveRecipe = payload => unwrap(api.post('/recipes', payload))
+export const deleteRecipe = index => unwrap(api.delete(`/recipes/${index}`))
 
-export async function scanFolder(path) {
-  const result = (await api.post('/scan', { path })).data
-  writeCache(SCAN_CACHE_KEY, result)
-  return result
-}
+/* ---------------- Agent 模型配置 ----------------
+   接口只回掩码，不回传完整 key；api_key / model 传空串表示清除该字段。 */
+export const getAgentSettings = () => unwrap(api.get('/settings/agent'))
+export const saveAgentSettings = payload => unwrap(api.post('/settings/agent', payload))
 
-export async function backupProject(sourceDir, destDir) {
-  const result = (await api.post('/backup', { source_dir: sourceDir, dest_dir: destDir })).data
-  writeCache(BACKUP_CACHE_KEY, result)
-  return result
-}
-
-export async function getLogs() {
-  return (await api.get('/logs')).data
-}
-
-export async function exportReport(path) {
-  return (await api.post('/export-report', { path })).data
-}
-
-export async function scanDuplicates(path) {
-  const result = (await api.post('/duplicates/scan', { path })).data
-  writeCache(DUPLICATE_CACHE_KEY, result)
-  return result
-}
-
-export async function moveDuplicateFiles(root, files) {
-  return (await api.post('/duplicates/move', { root, files })).data
-}
-
-export async function previewOrganization(sourceDir, targetDir) {
-  const result = (await api.post('/organize/preview', { source_dir: sourceDir, target_dir: targetDir })).data
-  writeCache(ORGANIZER_PREVIEW_CACHE_KEY, result)
-  return result
-}
-
-export async function executeOrganization(sourceDir, targetDir) {
-  const result = (await api.post('/organize/execute', { source_dir: sourceDir, target_dir: targetDir })).data
-  writeCache(ORGANIZER_RESULT_CACHE_KEY, result)
-  return result
-}
-
-export async function undoOrganization() {
-  const result = (await api.post('/organize/undo')).data
-  clearCache(ORGANIZER_RESULT_CACHE_KEY)
-  return result
-}
-
-export async function getScanAdvice(payload) {
-  return (await api.post('/ai/scan-advice', payload)).data
-}
-
-export const getCachedScan = () => readCache(SCAN_CACHE_KEY)
-export const getCachedBackup = () => readCache(BACKUP_CACHE_KEY)
-export const getCachedDuplicates = () => readCache(DUPLICATE_CACHE_KEY)
-export const getCachedOrganizerPreview = () => readCache(ORGANIZER_PREVIEW_CACHE_KEY)
-export const getCachedOrganizerResult = () => readCache(ORGANIZER_RESULT_CACHE_KEY)
+/* ---------------- 权限档位 ----------------
+   read / standard / full 三档；切到 full 必须带 confirm: true。 */
+export const getSafetySettings = () => unwrap(api.get('/settings/safety'))
+export const saveSafetySettings = payload => unwrap(api.post('/settings/safety', payload))
 
 export default api

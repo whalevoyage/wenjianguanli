@@ -21,6 +21,29 @@ frontend/.vite/
 frontend/.npm-cache/
 npm-debug.log*
 
+# Local release/build outputs
+build/
+dist/
+release/
+.venv-packaging/
+*.spec
+_final_smoke.txt
+
+# Local test captures and probe artifacts
+_conn.txt
+_pstest_out*.txt
+*_check.png
+home_chart_v21_*.png
+jobs_redesign_light.png
+tip_dot_check.png
+_bg_*.png
+frontend/_jobs_probe.cjs
+
+# Design/review screenshots (not runtime source)
+design/*.png
+permission_*.png
+perm_diag*.png
+
 # IDE and operating-system files
 .vscode/
 .idea/
@@ -35,3 +58,8 @@ reports/
 backups/
 *.log
 .filepilot/
+
+# 本地构建产物目录（构建时可能换 outDir，逐个兜底）
+frontend/.vk/
+frontend/.vl/
+frontend/.vm/

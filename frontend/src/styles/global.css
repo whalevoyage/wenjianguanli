@@ -1,41 +1,361 @@
+/* ============================================================================
+   Atlas（仓库名 FilePilotLite）· 设计令牌层
+   风格：B 端骨架 + Apple 皮肤
+   规则：① 骨架不动 ② 皮肤统一 ③ 对比度提到 Apple 水平 ④ 毛玻璃只用于 chrome 与浮层
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- 浅色（默认） */
 :root {
-  --primary: #1768ac;
-  --primary-strong: #114d81;
-  --accent: #b87926;
-  --success: #177a5f;
-  --warning: #b87926;
-  --danger: #b44c4c;
-  --page-bg: #f4f7fa;
-  --card-bg: #ffffff;
-  --text-primary: #1f2a37;
-  --text-secondary: #556273;
-  --text-muted: #7a8696;
-  --border: rgba(31, 42, 55, 0.09);
-  --border-strong: rgba(31, 42, 55, 0.14);
-  --shadow-sm: 0 6px 18px rgba(15, 23, 42, 0.04);
-  --shadow-lg: 0 14px 36px rgba(15, 23, 42, 0.06);
+  color-scheme: light;
+
+  /* 中性层 —— Apple 语义色阶 */
+  --ink: #1d1d1f;
+  --ink-2: #6e6e73;
+  --ink-3: #86868b;
+  --ink-4: #a1a1a6;
+
+  /* 表面层 —— 灰底 + 纯白卡。
+     层次只来自「卡片比页面底白」这一条明度差：
+     底 #F4F5F7（中性浅灰，不带任何色相） / 卡 #FFFFFF。 */
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #f6f7f9;
+  --inset: rgba(120, 120, 128, 0.1);
+
+  --hairline: rgba(0, 0, 0, 0.08);
+  --hairline-strong: rgba(0, 0, 0, 0.14);
+
+  /* 主色 —— Apple 系统蓝 */
+  --primary: #0071e3;
+  --primary-hover: #0077ed;
+  --primary-soft: #e8f1fd;
+  --primary-ink: #0b57a4;
+  /* 落在主色实底/渐变底上的前景色，恒为白 */
+  --on-primary: #ffffff;
+
+  /* 语义色 —— Apple 系统色（各配 soft 浅底 / ink 深字） */
+  --success: #34c759;
+  --success-soft: #e7f8ec;
+  --success-ink: #1b7a38;
+
+  --warning: #ff9500;
+  --warning-soft: #fff3e0;
+  --warning-ink: #a65c00;
+
+  --danger: #ff3b30;
+  --danger-soft: #feeceb;
+  --danger-ink: #b3261e;
+
+  --info: #5ac8fa;
+  --info-soft: #e6f5fd;
+  --info-ink: #0b6b93;
+
+  --violet: #af52de;
+  --violet-soft: #f6ebfb;
+  --violet-ink: #7b3aa0;
+
+  /* 品牌辅助色 —— 仅用于 Agent / AI 标识 */
+  --gold: #b87926;
+  --gold-soft: rgba(184, 121, 38, 0.12);
+  --brand-navy: #1768ac;
+  --grad-brand: linear-gradient(145deg, #35a1ff, #0071e3);
+  --grad-bar: linear-gradient(180deg, #4da3f5, #0071e3);
+
+  /* 图表专用渐变 —— 首页所有图表的统一语言（趋势柱 / 环形弧 / 进度条 / 类型条）。
+     亮端比 --primary 更亮，让色块「有光」；色相不变，仍遵守 v6 的单色化规则
+     （装饰只用主色一个色相）。--chart-glow 是同色相的柔和外发光，只给够粗的元素
+     （环形弧、趋势柱）用，8px 的细条加光会糊成一坨。 */
+  --chart-from: #35a1ff;
+  --chart-to: #0071e3;
+  --chart-glow: rgba(0, 113, 227, 0.32);
+
+  /* 面板一律不透明：参考图的效果是「灰底上的纯白卡」，
+     不需要半透明，也就不需要 backdrop-filter（省掉一层 GPU 开销） */
+  --glass: #ffffff;
+  --glass-strong: #ffffff;
+  --blur: none;
+  --blur-strong: none;
+  /* 高光位保留为「空阴影」而不是 none —— 它们被拼进 box-shadow 列表，
+     写成 none 会让整条 box-shadow 失效 */
+  --sheen: 0 0 0 0 rgba(0, 0, 0, 0);
+  --sheen-card: 0 0 0 0 rgba(0, 0, 0, 0);
+
+  /* 环境层归零：页面底是干净的中性灰，不带任何色相。
+     色相只出现在主色元素上（按钮、选中态、图表）。 */
+  --amb-a: rgba(0, 122, 255, 0);
+  --amb-b: rgba(0, 122, 255, 0);
+  --amb-c: rgba(0, 122, 255, 0);
+  --amb-d: rgba(0, 122, 255, 0);
+  --amb-e: rgba(0, 122, 255, 0);
+  --ambience-veil: 0;
+
+  --aur-a: rgba(0, 122, 255, 0);
+  --aur-b: rgba(0, 122, 255, 0);
+
+  /* 页标题：单一色相的深 → 中蓝，跨度收敛，不刺眼 */
+  --grad-title: linear-gradient(118deg, #0b57a4, #0071e3 68%, #3a9bea);
+
+  /* 侧栏：导航滚动条已隐藏，只留底部渐隐 */
+  --sidebar-fade: rgba(255, 255, 255, 0.95);
+
+  /* 圆角 —— Apple 尺度的连续曲率观感 */
   --radius-sm: 10px;
-  --radius: 16px;
-  --radius-lg: 22px;
+  --radius-ctl: 12px;
+  --radius: 20px;
+  --radius-lg: 26px;
+  --radius-pill: 999px;
+
+  /* 投影 —— 白卡要在灰底上「浮」起来，靠的就是这一层。
+     不用大而软的光晕影，用紧凑的双层影（近距贴边 + 远距扩散）。 */
+  --sh-1: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.04);
+  --sh-2: 0 4px 14px rgba(16, 24, 40, 0.07), 0 1px 3px rgba(16, 24, 40, 0.04);
+  --sh-3: 0 18px 44px rgba(16, 24, 40, 0.14), 0 2px 6px rgba(16, 24, 40, 0.05);
+  --sh-focus: 0 0 0 3.5px rgba(0, 113, 227, 0.18);
+
+  /* 动效 —— 时长与缓动全部 token 化，禁止散落魔法数字
+     铁律：进慢出快（开 250ms / 关 150ms） */
+  --duration-stagger: 40ms;
+  --duration-micro: 80ms;
+  --duration-quick: 150ms;
+  --duration-fast: 250ms;
+  --duration-medium: 350ms;
+  --duration-slow: 400ms;
+  --duration-very-slow: 500ms;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1); /* Apple 通用 */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* Apple 出场 */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); /* 按压回弹（带过冲） */
+  --ease-morph: cubic-bezier(0.32, 1.25, 0.4, 1); /* 高度 / 尺寸 morph */
+  --ease-slide: cubic-bezier(0.22, 1, 0.36, 1); /* 指示器滑动 · 万金油 */
+  --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1); /* 徽章弹出 */
+  --ease-linear: linear; /* 循环类 shimmer / spinner */
+
+  /* 距离档 —— 位移别超过这些档位 */
+  --dist-micro: 4px;
+  --dist-small: 6px;
+  --dist-base: 8px;
+  --dist-medium: 12px;
+  --dist-large: 30px;
+
+  /* 缩放档 —— 起始值永远朝 1 过渡，幅度克制 */
+  --scale-modal: 0.96;
+  --scale-dropdown: 0.97;
+  --scale-tooltip: 0.98;
+
+  /* 模糊档 —— blur 是本体系的签名，用模糊交叉溶解代替生硬淡入 */
+  --blur-fx-micro: 2px;
+  --blur-fx-base: 3px;
+  --blur-fx-strong: 8px;
+
+  /* 旧别名 → 统一指向新 token，避免散落两套数值 */
+  --dur-fast: var(--duration-quick);
+  --dur: var(--duration-fast);
+  --dur-slow: var(--duration-slow);
+
+  /* 字号阶 */
+  --fs-display: 34px;
+  --fs-h1: 29px;
+  --fs-h2: 20px;
+  --fs-title: 15px;
+  --fs-body: 13.5px;
+  --fs-note: 12px;
+  --fs-micro: 11px;
+
+  /* 字体栈 */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "PingFang SC", "Hiragino Sans GB", "Segoe UI Variable Text", "Microsoft YaHei UI",
+    "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Microsoft YaHei UI", monospace;
+
+  /* 布局 */
+  --sidebar-width: 228px;
+  --sidebar-collapsed: 76px;
   --content-width: 1460px;
-  --sidebar-width: 276px;
-  --sidebar-collapsed: 88px;
+
+  /* ---------------------------------------------------- Element Plus 变量映射 */
   --el-color-primary: var(--primary);
-  --el-color-primary-light-3: #4f90c2;
-  --el-color-primary-light-5: #7caed4;
-  --el-color-primary-light-7: #aacce6;
-  --el-color-primary-light-8: #c7def0;
-  --el-color-primary-light-9: #e8f1f8;
+  --el-color-primary-light-3: #4d9bea;
+  --el-color-primary-light-5: #80baf0;
+  --el-color-primary-light-7: #b3d8f6;
+  --el-color-primary-light-8: #cce6f9;
+  --el-color-primary-light-9: var(--primary-soft);
+  --el-color-primary-dark-2: var(--primary-ink);
+
   --el-color-success: var(--success);
+  --el-color-success-light-9: var(--success-soft);
   --el-color-warning: var(--warning);
+  --el-color-warning-light-9: var(--warning-soft);
   --el-color-danger: var(--danger);
-  color: var(--text-primary);
-  background: var(--page-bg);
-  font-family: "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --el-color-danger-light-9: var(--danger-soft);
+  --el-color-error: var(--danger);
+  --el-color-info: var(--ink-3);
+  --el-color-info-light-9: var(--surface-2);
+
+  --el-bg-color: var(--surface);
+  --el-bg-color-page: var(--bg);
+  /* 浮层保持高不透明度：下拉、菜单里的文字不能被背景色斑干扰 */
+  --el-bg-color-overlay: var(--glass-strong);
+
+  --el-text-color-primary: var(--ink);
+  --el-text-color-regular: var(--ink-2);
+  --el-text-color-secondary: var(--ink-3);
+  --el-text-color-placeholder: var(--ink-4);
+  --el-text-color-disabled: var(--ink-4);
+  --el-text-color-primary-hover: var(--primary);
+
+  --el-border-color: var(--hairline-strong);
+  --el-border-color-light: var(--hairline);
+  --el-border-color-lighter: var(--hairline);
+  --el-border-color-extra-light: var(--hairline);
+  --el-border-color-dark: var(--hairline-strong);
+  --el-border-color-darker: var(--hairline-strong);
+  --el-border-color-hover: var(--ink-4);
+
+  --el-fill-color: var(--surface-2);
+  --el-fill-color-light: var(--surface-2);
+  --el-fill-color-lighter: var(--bg);
+  --el-fill-color-extra-light: var(--bg);
+  --el-fill-color-dark: var(--inset);
+  --el-fill-color-darker: var(--inset);
+  --el-fill-color-blank: var(--surface);
+
+  --el-border-radius-base: var(--radius-ctl);
+  --el-border-radius-small: var(--radius-sm);
+  --el-border-radius-round: var(--radius-pill);
+
+  --el-box-shadow: var(--sh-2);
+  --el-box-shadow-light: var(--sh-1);
+  --el-box-shadow-lighter: var(--sh-1);
+  --el-box-shadow-dark: var(--sh-3);
+
+  --el-font-family: var(--font-sans);
+  --el-mask-color: rgba(251, 251, 253, 0.72);
+  --el-mask-color-extra-light: rgba(251, 251, 253, 0.4);
+  --el-disabled-bg-color: var(--surface-2);
+
+  color: var(--ink);
+  background: var(--bg);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
 
+/* ---------------------------------------------------------------- 深色主题 */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --ink: #f5f5f7;
+  --ink-2: #a1a1a6;
+  --ink-3: #8e8e93;
+  --ink-4: #636366;
+
+  --bg: #1c1c1e;
+  --surface: #2c2c2e;
+  --surface-2: #363638;
+  --inset: rgba(120, 120, 128, 0.24);
+
+  --hairline: rgba(255, 255, 255, 0.1);
+  --hairline-strong: rgba(255, 255, 255, 0.18);
+
+  --primary: #0a84ff;
+  --primary-hover: #2e95ff;
+  --primary-soft: rgba(10, 132, 255, 0.2);
+  --primary-ink: #6bb4ff;
+
+  --success: #30d158;
+  --success-soft: rgba(48, 209, 88, 0.18);
+  --success-ink: #6fe08c;
+
+  --warning: #ff9f0a;
+  --warning-soft: rgba(255, 159, 10, 0.18);
+  --warning-ink: #ffc46b;
+
+  --danger: #ff453a;
+  --danger-soft: rgba(255, 69, 58, 0.18);
+  --danger-ink: #ff8a80;
+
+  --info: #64d2ff;
+  --info-soft: rgba(100, 210, 255, 0.18);
+  --info-ink: #8ee2ff;
+
+  --violet: #bf5af2;
+  --violet-soft: rgba(191, 90, 242, 0.2);
+  --violet-ink: #d9a0f5;
+
+  --gold: #d9a044;
+  --gold-soft: rgba(217, 160, 68, 0.18);
+  --brand-navy: #6bb4ff;
+  --grad-brand: linear-gradient(145deg, #4da3f5, #0a84ff);
+  --grad-bar: linear-gradient(180deg, #4da3f5, #0a84ff);
+
+  /* 图表渐变：深色下亮端要更亮，暗端跟着深色主色走 */
+  --chart-from: #66b8ff;
+  --chart-to: #0a84ff;
+  --chart-glow: rgba(10, 132, 255, 0.42);
+
+  /* 不透明面板，与浅色一致 */
+  --glass: #2c2c2e;
+  --glass-strong: #2c2c2e;
+  /* 深色保留一层极淡的顶边高光，否则纯黑面板会发闷 */
+  --sheen: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --sheen-card: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+
+  /* 深色保留一点环境光（纯黑面板发闷），但比之前收了很多 */
+  --amb-a: rgba(10, 132, 255, 0.1);
+  --amb-b: rgba(10, 132, 255, 0.07);
+  --amb-c: rgba(10, 132, 255, 0.05);
+  --amb-d: rgba(10, 132, 255, 0.045);
+  --amb-e: rgba(10, 132, 255, 0.055);
+  --ambience-veil: 0.2;
+
+  --aur-a: rgba(10, 132, 255, 0.16);
+  --aur-b: rgba(10, 132, 255, 0.08);
+
+  --grad-title: linear-gradient(118deg, #cfe4ff, #6bb4ff 62%, #0a84ff);
+
+  --sidebar-fade: rgba(44, 44, 46, 0.95);
+
+  /* 深色第一原则：阴影几乎不可见 → 层级改由表面明度差承担 */
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.4), var(--sheen-card);
+  --sh-2: 0 10px 30px rgba(0, 0, 0, 0.5), var(--sheen-card);
+  --sh-3: 0 24px 60px rgba(0, 0, 0, 0.62);
+  --sh-focus: 0 0 0 3.5px rgba(10, 132, 255, 0.3);
+
+  --el-color-primary-light-3: #3d9dff;
+  --el-color-primary-light-5: #6bb4ff;
+  --el-color-primary-light-7: #9acbff;
+  --el-color-primary-light-8: #b4d7ff;
+  --el-color-primary-light-9: var(--primary-soft);
+  --el-color-primary-dark-2: #0060c9;
+
+  --el-bg-color: var(--surface);
+  --el-bg-color-page: var(--bg);
+  /* 浮层保持高不透明度：下拉、菜单里的文字不能被背景色斑干扰 */
+  --el-bg-color-overlay: var(--glass-strong);
+
+  --el-text-color-primary: var(--ink);
+  --el-text-color-regular: var(--ink-2);
+  --el-text-color-secondary: var(--ink-3);
+  --el-text-color-placeholder: var(--ink-4);
+
+  --el-border-color: var(--hairline-strong);
+  --el-border-color-light: var(--hairline);
+  --el-border-color-lighter: var(--hairline);
+  --el-border-color-extra-light: var(--hairline);
+
+  --el-fill-color: var(--surface-2);
+  --el-fill-color-light: var(--surface-2);
+  --el-fill-color-lighter: rgba(255, 255, 255, 0.04);
+  --el-fill-color-extra-light: rgba(255, 255, 255, 0.03);
+  --el-fill-color-blank: var(--surface);
+
+  --el-mask-color: rgba(0, 0, 0, 0.6);
+  --el-mask-color-extra-light: rgba(0, 0, 0, 0.3);
+  --el-disabled-bg-color: var(--surface-2);
+}
+
+/* ---------------------------------------------------------------- 基础重置 */
 * {
   box-sizing: border-box;
 }
@@ -47,18 +367,73 @@ body,
   margin: 0;
 }
 
+/* 应用整体抬到纱罩之上（纱罩在 body::before，z-index: 0） */
+#app {
+  position: relative;
+  z-index: 1;
+}
+
 html,
 body {
-  background: var(--page-bg);
+  background: var(--bg);
 }
 
 body {
-  color: var(--text-primary);
+  color: var(--ink);
   overflow-x: hidden;
-  background:
-    radial-gradient(circle at top left, rgba(23, 104, 172, 0.04), transparent 22%),
-    radial-gradient(circle at top right, rgba(184, 121, 38, 0.035), transparent 20%),
-    var(--page-bg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg);
+  /* 五层背景（从上到下）：
+     ① 点阵纹理 —— 给 backdrop-filter 提供高频参照，没有它 blur 看不出来
+     ②~⑤ 环境色斑 —— 让画布本身带色相，白卡才有「浮起来」的参照 */
+  background-image:
+    radial-gradient(1100px 780px at 4% -6%, var(--amb-a), transparent 60%),
+    radial-gradient(980px 700px at 98% 2%, var(--amb-b), transparent 58%),
+    radial-gradient(900px 760px at 88% 98%, var(--amb-c), transparent 60%),
+    radial-gradient(820px 700px at 14% 94%, var(--amb-d), transparent 60%),
+    radial-gradient(920px 480px at 48% -10%, var(--amb-e), transparent 62%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+/* 纱罩：压在整个背景之上、应用之下，用透明度统一控制环境层浓度 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: var(--bg);
+  opacity: var(--ambience-veil);
+  transition: opacity var(--dur-slow) var(--ease), background-color var(--dur) var(--ease);
+}
+
+/* 环境层强度：三个档位，改 <html data-ambience="..."> 即可 */
+html[data-ambience='quiet'] {
+  --ambience-veil: 0.62;
+}
+
+html[data-ambience='standard'] {
+  --ambience-veil: 0.28;
+}
+
+html[data-ambience='bold'] {
+  --ambience-veil: 0;
+}
+
+[data-theme='dark'][data-ambience='quiet'] {
+  --ambience-veil: 0.6;
+}
+
+[data-theme='dark'][data-ambience='standard'] {
+  --ambience-veil: 0.24;
+}
+
+[data-theme='dark'][data-ambience='bold'] {
+  --ambience-veil: 0;
 }
 
 a {
@@ -73,16 +448,69 @@ textarea {
   font: inherit;
 }
 
+::selection {
+  background: var(--primary-soft);
+  color: var(--primary-ink);
+}
+
+/* 键盘焦点不画蓝色描边，改用中性细描边（保留键盘可达性、去蓝框）。 */
+:focus-visible {
+  outline: 2px solid var(--hairline-strong);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--inset);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: var(--radius-pill);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-4);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ------------------------------------------------------------ 通用表面与排版 */
+.surface,
 .app-card {
   position: relative;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--sh-1);
+  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+
+/* 可交互表面：悬停改「表面提亮」而非「投影上浮」 */
+.surface--interactive:hover {
+  background: var(--surface-2);
 }
 
 .panel-card {
-  padding: 20px;
+  padding: 24px;
 }
 
 .panel-title-row {
@@ -95,22 +523,49 @@ textarea {
 
 .panel-title {
   margin: 0;
-  color: var(--text-primary);
-  font-size: 17px;
-  font-weight: 700;
+  color: var(--ink);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  letter-spacing: -0.012em;
 }
 
 .panel-subtitle {
-  margin: 4px 0 0;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1.7;
+  margin: 5px 0 0;
+  color: var(--ink-3);
+  font-size: var(--fs-note);
+  line-height: 1.65;
+}
+
+/* 面板标题行右侧的状态小字。
+   原本是页头里的 meta 胶囊，页头全站去掉后，承载真实数字的那几条落在这里。 */
+.panel-count {
+  flex: none;
+  color: var(--ink-2);
+  font-size: var(--fs-note);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 面板标题行右侧的一组元素（状态小字 + 操作按钮） */
+.panel-title-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 筛选行右端的操作组（配合 .filters-row 的 space-between） */
+.page-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .section-stack,
 .content-stack {
   display: grid;
-  gap: 18px;
+  gap: 24px;
 }
 
 .stats-grid {
@@ -121,110 +576,824 @@ textarea {
 
 .section-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
-  gap: 18px;
+  grid-template-columns: minmax(0, 4fr) minmax(320px, 8fr);
+  /* 两栏各自按内容高度收：等高对齐会让内容少的一侧留下一大片空白
+     （首页「磁盘容量」曾被「接口调用」的 8 行撑高，底部空出约 140px） */
+  align-items: start;
+  gap: 24px;
 }
 
 .duo-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  gap: 24px;
 }
+
+.form-page {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+/* 表单页的内部选项跟随卡片拉伸，避免控件只挤在左侧。
+   v22 起字段容器统一叫 .option-block（原 scan-actions__field / map-actions__field 已并入）。 */
+.form-page .option-block,
+.form-page .switch-field {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.form-page .option-block .el-select,
+.form-page .option-block .el-segmented {
+  width: 100%;
+}
+
+.panel-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 0;
+  color: var(--ink-3);
+  background: transparent;
+  border: 0;
+  font-size: var(--fs-note);
+  line-height: 1.5;
+}
+
+.panel-note .el-alert__icon {
+  margin: 0;
+  font-size: 14px;
+}
+
+.panel-note .el-alert__content {
+  padding: 0;
+}
+
+.panel-note .el-alert__title {
+  color: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  line-height: inherit;
+}
+
+/* Element Plus 的 .el-alert--info.is-light（0,2,0）自带灰底 + width:100%，
+   优先级压过 .panel-note（0,1,0），把「朴素一行提示」渲染成了一条整宽灰带 ——
+   这正是首页之外的页面看着「不如首页白」的元凶。这里提权还原设计意图。
+   ⚠️ 必须排在下面的 warning 规则之前：两者同为 (0,3,0)，靠后的赢，
+   否则彩色警告态会被这条抹平成无色。 */
+.panel-note.el-alert.is-light {
+  width: fit-content;
+  padding: 0;
+  color: var(--ink-3);
+  background: transparent;
+  border: 0;
+}
+
+.panel-note.el-alert--warning.is-light {
+  padding: 5px 8px;
+  color: var(--warning-ink);
+  background: var(--warning-soft);
+  border-radius: var(--radius-sm);
+}
+
+/* job-detail-section / job-params 只在 Jobs 页使用，样式收归 Jobs.vue scoped；
+   此处不再保留全局定义（原来文件内重复出现两份）。 */
 
 .form-surface {
-  padding: 20px;
-  background: #fff;
-  border: 1px solid var(--border);
+  padding: 20px 22px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--sh-1);
 }
 
-.metric-strip {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin: 0;
+/* ------------------------------------------------------ 表单页共享工具类（v22）
+   .row-actions 原 7 份、.field-label 原 5 份、.option-block 原 3 份
+   在各视图 scoped 里逐字重复，收敛为全局一份。 */
+.row-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 18px 0 14px;
+  flex-wrap: wrap;
 }
 
-.metric-strip__item {
-  padding: 16px;
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 14px;
+/* 整行只有一个主按钮时右对齐（Backup / Duplicates） */
+.row-actions--end {
+  justify-content: flex-end;
 }
 
-.metric-strip__label {
-  color: var(--text-muted);
-  font-size: 12px;
+.field-label {
+  color: var(--ink-3);
+  font-size: var(--fs-note);
   font-weight: 600;
 }
 
-.metric-strip__value {
-  margin-top: 8px;
-  color: var(--text-primary);
-  font-size: clamp(20px, 2vw, 28px);
-  font-weight: 700;
-  letter-spacing: -0.03em;
+.option-block {
+  display: grid;
+  gap: 8px;
 }
 
-.path-text {
+/* 状态圆点：原 Home / Logs / Duplicates / JobProgress 四份私实现，取并集。
+   文本色恒定 --ink-2，语义只由圆点颜色承担。 */
+.status-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: var(--fs-note);
+  white-space: nowrap;
+}
+
+.status-dot::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+.status-dot--primary::before {
+  background: var(--primary);
+}
+
+.status-dot--success::before {
+  background: var(--success);
+}
+
+.status-dot--warning::before {
+  background: var(--warning);
+}
+
+.status-dot--danger::before {
+  background: var(--danger);
+}
+
+/* 路径 / 等宽 */
+.path-text,
+.mono {
   overflow: hidden;
-  color: var(--text-secondary);
-  font-family: "Cascadia Code", Consolas, "Microsoft YaHei UI", monospace;
-  font-size: 12px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-note);
+  font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .surface-caption {
   display: inline-block;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .muted {
-  color: var(--text-muted);
+  color: var(--ink-3);
 }
 
 .empty-card {
   padding: 48px 20px;
 }
 
+/* --------------------------------------------------------- 页头 meta 小标签
+   11 个视图共 26 处使用。此前没有任何样式定义 → 渲染成裸文本。 */
+.meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 11px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-note);
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.meta-pill::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--primary);
+  opacity: 0.75;
+}
+
+/* ------------------------------------------------------------- 空状态（自绘）
+   不用 el-empty 的默认插画——那套线稿与本项目皮肤完全不搭 */
+.empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 40px 20px 36px;
+  text-align: center;
+}
+
+.empty-state__icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 12px;
+  color: var(--ink-3);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-ctl);
+}
+
+.empty-state__icon .el-icon {
+  font-size: 20px;
+}
+
+.empty-state strong {
+  color: var(--ink);
+  font-size: var(--fs-body);
+  font-weight: 500;
+}
+
+.empty-state p {
+  max-width: 380px;
+  margin: 3px 0 0;
+  color: var(--ink-3);
+  font-size: var(--fs-note);
+  line-height: 1.65;
+}
+
+.empty-state__action {
+  margin-top: 14px;
+}
+
+/* --------------------------------------------------- 数值换值时的 pop-in
+   transitions.dev「Number pop-in」：位移 + 模糊 + 透明度一起收 */
+@keyframes num-pop {
+  from {
+    opacity: 0;
+    transform: translateY(var(--dist-small));
+    filter: blur(var(--blur-fx-base));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+}
+
+.num-pop {
+  animation: num-pop var(--duration-slow) var(--ease-out) both;
+}
+
+/* ------------------------------------------------------------ 通用按压反馈 */
+.pressable {
+  transition: transform var(--duration-quick) var(--ease-spring),
+    background-color var(--dur-fast) var(--ease);
+}
+
+.pressable:active {
+  transform: scale(0.97);
+}
+
+/* 数值专用：等宽数字，避免跳动 */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================================
+   视觉冲击层
+   ========================================================================== */
+
+/* 光晕漂移：位移很小、周期很长，只是让画面「活着」，
+   不构成会分散注意力的运动 */
+@keyframes aurora-drift {
+  from {
+    transform: translate3d(-1.2%, -0.8%, 0) scale(1.02);
+  }
+  to {
+    transform: translate3d(1.2%, 1%, 0) scale(1.06);
+  }
+}
+
+/* 卡片入场：位移 + 缩放 + 模糊一起收。
+   注意 to 里不声明 filter —— 让动画结束后回到 none，
+   否则残留的 filter 会给 fixed 定位的后代（下拉/抽屉）制造包含块。 */
+@keyframes card-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--dist-medium)) scale(0.982);
+    filter: blur(var(--blur-fx-base));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 卡片不再上 backdrop-filter。
+   背景压到接近纯白之后，blur 背后已经没有任何可糊的细节 ——
+   花了 GPU 却看不出区别。玻璃感改由「半透明白 + 上沿高光 + 发丝线」承担。
+   模糊只保留在真正浮在内容之上的层：侧栏、对话框、下拉。 */
+
+/* 顶级区块错峰入场 */
+.section-stack > *,
+.content-stack > * {
+  animation: card-rise var(--duration-slow) var(--ease-out) both;
+}
+
+.section-stack > *:nth-child(1),
+.content-stack > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+
+.section-stack > *:nth-child(2),
+.content-stack > *:nth-child(2) {
+  animation-delay: 55ms;
+}
+
+.section-stack > *:nth-child(3),
+.content-stack > *:nth-child(3) {
+  animation-delay: 110ms;
+}
+
+.section-stack > *:nth-child(4),
+.content-stack > *:nth-child(4) {
+  animation-delay: 165ms;
+}
+
+.section-stack > *:nth-child(5),
+.content-stack > *:nth-child(5) {
+  animation-delay: 220ms;
+}
+
+.section-stack > *:nth-child(6),
+.content-stack > *:nth-child(6) {
+  animation-delay: 275ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .section-stack > *,
+  .content-stack > * {
+    animation: none;
+  }
+}
+
+/* ============================================================================
+   Element Plus · Apple 化覆写
+   ========================================================================== */
+
+/* --------------------------------------------------------------------- 按钮 */
 .el-button {
-  min-height: 40px;
-  border-radius: 12px;
-  font-weight: 600;
+  --el-button-font-weight: 500;
+  min-height: 36px;
+  padding: 0 16px;
+  border-radius: var(--radius-ctl);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  transition: background-color var(--duration-quick) var(--ease),
+    border-color var(--duration-quick) var(--ease), color var(--duration-quick) var(--ease),
+    box-shadow var(--duration-quick) var(--ease), transform var(--duration-fast) var(--ease-spring);
 }
 
+.el-button:active {
+  transform: scale(0.96);
+}
+
+.el-button--small {
+  min-height: 30px;
+  padding: 0 12px;
+  font-size: var(--fs-note);
+  border-radius: var(--radius-sm);
+}
+
+.el-button--large {
+  min-height: 42px;
+  padding: 0 20px;
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--primary);
+  --el-button-border-color: var(--primary);
+  --el-button-hover-bg-color: var(--primary-hover);
+  --el-button-hover-border-color: var(--primary-hover);
+  --el-button-active-bg-color: var(--primary-ink);
+  box-shadow: 0 1px 3px rgba(0, 113, 227, 0.28);
+}
+
+.el-button--default {
+  --el-button-bg-color: var(--surface-2);
+  --el-button-border-color: transparent;
+  --el-button-hover-bg-color: var(--inset);
+  --el-button-hover-border-color: transparent;
+  --el-button-hover-text-color: var(--ink);
+  color: var(--ink);
+}
+
+.el-button.is-text,
+.el-button.is-link {
+  min-height: 30px;
+  padding: 0 8px;
+  background: transparent;
+  font-weight: 500;
+}
+
+.el-button.is-link:hover {
+  background: var(--inset);
+}
+
+.el-button.is-disabled,
+.el-button.is-disabled:hover {
+  opacity: 0.45;
+  transform: none;
+  box-shadow: none;
+}
+
+/* --------------------------------------------------------------- 输入 / 选择 */
 .el-input__wrapper,
-.el-select__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  border-radius: var(--radius-ctl);
+  background: var(--inset);
+  box-shadow: none !important;
+  border: 1px solid transparent;
+  transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.el-input__wrapper:hover,
+.el-textarea__inner:hover,
+.el-select__wrapper:hover {
+  background: var(--surface-2);
+}
+
+/* 聚焦不画蓝色框线：仅把底色提亮到 surface 作为提示，无描边、无光晕（全项目统一）。 */
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus,
+.el-select__wrapper.is-focused {
+  background: var(--surface);
+  border-color: transparent;
+  box-shadow: none !important;
+}
+
+/* Chrome 自动填充会给输入框刷一层浅蓝底（#E8F0FE），与本皮肤冲突。
+   用超长过渡让自动填充的 background-color 实际上不生效（输入框保持透明、由 wrapper 决定底色），
+   只强制文字色，避免「凭空多出一块蓝」。 */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--ink) !important;
+  caret-color: var(--ink);
+  transition: background-color 9999s ease-out 0s;
+}
+
+.el-input__inner,
 .el-textarea__inner {
-  border-radius: 12px;
+  color: var(--ink);
+  font-size: var(--fs-body);
 }
 
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder {
+  color: var(--ink-4);
+}
+
+.el-select-dropdown,
+/* 浮层（下拉 / 菜单 / 弹层）用模态级投影：
+   --sh-2 在白底上只有 7% 透明度，弹层压住正文时读作「贴错位置的白块」，
+   浮层必须一眼看出是浮在内容之上的。 */
+.el-popper.is-light {
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--sh-3);
+  background: var(--glass-strong);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+}
+
+/* 权限档位弹层：teleport 到 body 后 scoped 样式失效，popper-class 是全局类。
+   作用是压过输入框（z-index）+ 给足底部留白，别让最后一行提示被胶囊切掉。 */
+.perm-popper {
+  z-index: 2400;
+  padding: 10px 12px;
+}
+
+.el-select-dropdown__item {
+  border-radius: 8px;
+  margin: 2px 6px;
+  font-size: var(--fs-body);
+}
+
+.el-select-dropdown__item.is-selected {
+  color: var(--primary-ink);
+  background: var(--primary-soft);
+  font-weight: 500;
+}
+
+/* --------------------------------------------------------------------- 标签 */
 .el-tag {
-  border-radius: 999px;
-  font-weight: 600;
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: 0.005em;
 }
 
+.el-tag--primary,
+.el-tag--info {
+  background: var(--primary-soft);
+  color: var(--primary-ink);
+}
+
+.el-tag--success {
+  background: var(--success-soft);
+  color: var(--success-ink);
+}
+
+.el-tag--warning {
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+}
+
+.el-tag--danger {
+  background: var(--danger-soft);
+  color: var(--danger-ink);
+}
+
+/* --------------------------------------------------------------------- 提示 */
 .el-alert {
-  border-radius: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--hairline);
+  align-items: flex-start;
 }
 
+.el-alert--success.is-light {
+  background: var(--success-soft);
+  color: var(--success-ink);
+}
+
+.el-alert--warning.is-light {
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+}
+
+.el-alert--error.is-light,
+.el-alert--danger.is-light {
+  background: var(--danger-soft);
+  color: var(--danger-ink);
+}
+
+.el-alert--info.is-light {
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+.el-alert__title {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.el-alert__description {
+  font-size: var(--fs-note);
+  line-height: 1.7;
+  margin: 4px 0 0;
+  opacity: 0.88;
+}
+
+/* --------------------------------------------------------------- 分段控件 */
 .el-segmented {
+  --el-segmented-bg-color: var(--inset);
+  --el-segmented-item-selected-bg-color: var(--surface);
+  --el-segmented-item-selected-color: var(--ink);
+  --el-segmented-item-hover-bg-color: transparent;
   padding: 3px;
-  background: #f3f6f9;
-  border-radius: 12px;
+  border-radius: var(--radius-ctl);
+  background: var(--inset);
 }
 
-.el-segmented__item,
-.el-segmented__item-selected {
+.el-segmented__item {
   border-radius: 9px;
+  font-size: var(--fs-note);
+  font-weight: 500;
+  color: var(--ink-2);
+  transition: color var(--dur) var(--ease), background-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
 }
 
+.el-segmented__item-selected,
+.el-segmented__item.is-selected {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.el-segmented__item-selected .el-segmented__item-label,
+.el-segmented__item.is-selected .el-segmented__item-label {
+  font-weight: 500;
+}
+
+/* ------------------------------------------------------------------- 表格 */
+.el-table {
+  --el-table-border-color: var(--hairline);
+  --el-table-header-bg-color: transparent;
+  --el-table-header-text-color: var(--ink-3);
+  --el-table-text-color: var(--ink);
+  --el-table-row-hover-bg-color: var(--surface-2);
+  background: transparent;
+  font-size: var(--fs-body);
+}
+
+.el-table th.el-table__cell {
+  background: transparent;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+  padding: 10px 0;
+}
+
+.el-table td.el-table__cell {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.el-table__inner-wrapper::before {
+  display: none;
+}
+
+.el-table tr {
+  transition: background-color var(--dur-fast) var(--ease);
+}
+
+/* ------------------------------------------------------------------ 其它 */
+.el-empty {
+  --el-empty-fill-color-0: var(--surface-2);
+  --el-empty-fill-color-8: var(--surface-2);
+  padding: 36px 0;
+}
+
+.el-empty__description p {
+  color: var(--ink-3);
+  font-size: var(--fs-note);
+}
+
+.el-divider {
+  --el-border-color: var(--hairline);
+  margin: 18px 0;
+}
+
+.el-divider__text {
+  background: var(--surface);
+  color: var(--ink-3);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+}
+
+.el-switch.is-checked .el-switch__core {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.el-switch__core {
+  border-radius: var(--radius-pill);
+}
+
+.el-checkbox__input.is-checked .el-checkbox__inner,
+.el-checkbox__input.is-indeterminate .el-checkbox__inner {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.el-checkbox__inner {
+  border-radius: 6px;
+  border-color: var(--hairline-strong);
+  background: var(--surface);
+}
+
+.el-checkbox__label {
+  color: var(--ink-2);
+  font-size: var(--fs-body);
+}
+
+.el-progress-bar__outer {
+  background: var(--inset);
+  border-radius: var(--radius-pill);
+}
+
+.el-progress-bar__inner {
+  border-radius: var(--radius-pill);
+  transition: width var(--dur-slow) var(--ease);
+}
+
+.el-collapse,
+.el-collapse-item__header,
+.el-collapse-item__wrap {
+  background: transparent;
+  border-color: var(--hairline);
+}
+
+.el-collapse-item__header {
+  color: var(--ink);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  height: 46px;
+  line-height: 46px;
+}
+
+.el-collapse-item__content {
+  color: var(--ink-2);
+  font-size: var(--fs-body);
+  padding-bottom: 18px;
+  line-height: 1.7;
+}
+
+.el-skeleton {
+  --el-skeleton-color: var(--surface-2);
+  --el-skeleton-to-color: var(--inset);
+}
+
+.el-loading-mask {
+  background-color: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+}
+
+.el-loading-spinner .path {
+  stroke: var(--primary);
+}
+
+.el-drawer {
+  background: var(--glass-strong);
+  backdrop-filter: var(--blur-strong);
+  -webkit-backdrop-filter: var(--blur-strong);
+}
+
+.el-drawer__body {
+  padding: 16px;
+}
+
+.el-overlay {
+  background-color: var(--el-mask-color);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.el-tooltip__popper.is-dark,
+.el-popper.is-dark {
+  background: var(--ink);
+  color: var(--bg);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-note);
+  padding: 7px 10px;
+}
+
+.el-message {
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--sh-2);
+  background: var(--glass-strong);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+}
+
+/* ------------------------------------------------- 主题切换的整页揭示动效
+   View Transition API：默认的交叉淡化会与我们的 clip-path 圆形揭示打架，
+   所以先把两个快照的动画关掉，再由 JS 只驱动「新快照」的 clip-path。 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 0;
+}
+
+::view-transition-new(root) {
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+
+/* -------------------------------------------------------------- 响应式栅格 */
 @media (max-width: 1200px) {
   .section-grid,
   .duo-grid {
@@ -233,7 +1402,6 @@ textarea {
 }
 
 @media (max-width: 640px) {
-  .panel-card,
   .form-surface {
     padding: 16px;
   }

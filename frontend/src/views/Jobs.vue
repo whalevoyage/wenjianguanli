@@ -1,0 +1,399 @@
+<script setup>
+import { computed, onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Operation, Refresh } from '@element-plus/icons-vue'
+import EmptyState from '../components/EmptyState.vue'
+import { cancelJob, listJobs, rollbackJob } from '../api/filepilot'
+import JobProgress from '../components/JobProgress.vue'
+import { formatDateTime, formatShortTime } from '../utils/formatters'
+
+const jobs = ref([])
+const loading = ref(false)
+const selectedId = ref('')
+const typeFilter = ref('全部')
+
+const typeOptions = computed(() => ['全部', ...new Set(jobs.value.map(job => job.type_label).filter(Boolean))])
+
+const filtered = computed(() => (
+  typeFilter.value === '全部'
+    ? jobs.value
+    : jobs.value.filter(job => job.type_label === typeFilter.value)
+))
+
+const selected = computed(() => jobs.value.find(job => job.id === selectedId.value) || null)
+
+const runningCount = computed(() => jobs.value.filter(job => ['running', 'pending'].includes(job.status)).length)
+
+async function load(showMessage = false) {
+  loading.value = true
+  try {
+    const data = await listJobs(100)
+    jobs.value = data.jobs || []
+    if (!selectedId.value && jobs.value.length) selectedId.value = jobs.value[0].id
+    if (showMessage) ElMessage.success('任务列表已刷新')
+  } catch (error) {
+    ElMessage.error(error.message)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function cancelJobById(job) {
+  try {
+    await cancelJob(job.id)
+    ElMessage.success('已请求中断')
+    load()
+  } catch (error) {
+    ElMessage.error(error.message)
+  }
+}
+
+async function rollbackJobById(job) {
+  try {
+    const result = await rollbackJob(job.id)
+    result.errors?.length
+      ? ElMessage.warning(`回滚完成，${result.errors.length} 项失败`)
+      : ElMessage.success(`已回滚 ${result.restored_count} 项`)
+    load()
+  } catch (error) {
+    ElMessage.error(error.message)
+  }
+}
+
+function resultSummary(job) {
+  const result = job?.result
+  if (!result) return []
+  const pairs = [
+    ['文件总数', result.total_files],
+    ['总体积', result.total_size_text],
+    ['重复组', result.group_count],
+    ['可回收', result.reclaimable_size_text],
+    ['问题数', result.total_count],
+    ['可释放', result.total_size_text],
+    ['迁移项', result.item_count],
+    ['已校验', result.verified_count],
+    ['已删除源', result.deleted_count],
+    ['清理项', result.cleaned_count],
+    ['释放空间', result.freed_size_text],
+    ['备份文件数', result.file_count],
+    ['压缩包', result.size_text],
+  ]
+  return pairs
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .slice(0, 6)
+    .map(([label, value]) => ({ label, value: String(value) }))
+}
+
+/** 参数值展示：数组拆成小 tag，空值显示 —，其余对象转紧凑 JSON */
+function displayParam(value) {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+onMounted(() => load())
+</script>
+
+<template>
+  <div v-loading="loading" class="section-stack">
+    <section class="jobs-layout">
+      <article class="app-card panel-card">
+        <div class="panel-title-row">
+          <h3 class="panel-title">任务列表</h3>
+          <div class="panel-title-actions">
+            <span class="panel-count">
+              进行中 {{ runningCount }} 个 · 共 {{ jobs.length }} 条
+            </span>
+            <el-button :icon="Refresh" text circle title="刷新" @click="load(true)" />
+          </div>
+        </div>
+
+        <div v-if="jobs.length" class="type-chips">
+          <button
+            v-for="item in typeOptions"
+            :key="item"
+            type="button"
+            class="type-chip"
+            :class="{ 'is-active': typeFilter === item }"
+            @click="typeFilter = item"
+          >
+            {{ item === '全部' ? '全部' : item }}
+          </button>
+        </div>
+
+        <div v-if="filtered.length" class="job-list">
+          <button
+            v-for="job in filtered"
+            :key="job.id"
+            type="button"
+            class="job-item"
+            :class="{ 'is-active': job.id === selectedId }"
+            @click="selectedId = job.id"
+          >
+            <div class="job-item__head">
+              <span class="job-item__type" :class="`is-${job.status}`">{{ job.type_label }}</span>
+              <span class="job-item__time" :title="formatDateTime(job.created_at)">{{ formatShortTime(job.created_at) }}</span>
+            </div>
+            <p class="job-item__title" :title="job.title">{{ job.title }}</p>
+          </button>
+        </div>
+
+        <EmptyState
+          v-else
+          :icon="Operation"
+          title="还没有任务"
+        />
+      </article>
+
+      <article class="app-card panel-card">
+        <template v-if="selected">
+          <JobProgress
+            :job="selected"
+            @cancel="cancelJobById(selected)"
+            @rollback="rollbackJobById(selected)"
+          />
+
+          <div v-if="selected.params && Object.keys(selected.params).length" class="job-detail-section">
+            <div class="job-detail-section__title">参数</div>
+            <div class="job-params">
+              <template v-for="(value, key) in selected.params" :key="key">
+                <span class="job-params__key">{{ key }}</span>
+                <div class="job-params__value">
+                  <template v-if="Array.isArray(value)">
+                    <span v-for="(tag, index) in value.slice(0, 5)" :key="index" class="param-tag">{{ tag }}</span>
+                    <span v-if="value.length > 5" class="param-tag param-tag--more">+{{ value.length - 5 }}</span>
+                  </template>
+                  <template v-else>{{ displayParam(value) }}</template>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div v-if="resultSummary(selected).length" class="job-detail-section">
+            <div class="job-detail-section__title">结果</div>
+            <div class="result-grid">
+              <div v-for="item in resultSummary(selected)" :key="item.label" class="result-item">
+                <span>{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <EmptyState
+          v-else
+          :icon="Operation"
+          title="从左侧选一条任务"
+        />
+      </article>
+    </section>
+  </div>
+</template>
+
+<style scoped>
+.jobs-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 4fr) minmax(0, 8fr);
+  gap: 18px;
+  align-items: start;
+}
+
+/* 类型筛选 chips：取代原来孤零零占一行的 select + 刷新按钮 */
+.type-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.type-chip {
+  padding: 3px 11px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--fs-note);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.type-chip:hover {
+  background: var(--inset);
+}
+
+.type-chip.is-active {
+  background: var(--primary-soft);
+  color: var(--primary-ink);
+  font-weight: 600;
+}
+
+/* 列表：对齐 Agent 任务面板语言——静止透明 / hover --inset / 当前项 --primary-soft */
+.job-list {
+  display: grid;
+  gap: 2px;
+  max-height: calc(100vh - 300px);
+  min-height: 200px;
+  overflow-y: auto;
+}
+
+.job-item {
+  padding: 9px 12px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease);
+}
+
+.job-item:hover {
+  background: var(--inset);
+}
+
+.job-item.is-active {
+  background: var(--primary-soft);
+}
+
+.job-item__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* 状态点前置在类型名前：蓝=进行/排队，橙=等待确认，绿=完成，红=失败，灰=取消 */
+.job-item__type {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.job-item__type::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-4);
+  flex: none;
+}
+
+.job-item__type.is-running::before,
+.job-item__type.is-pending::before {
+  background: var(--primary);
+}
+
+.job-item__type.is-waiting::before {
+  background: var(--warning);
+}
+
+.job-item__type.is-done::before {
+  background: var(--success);
+}
+
+.job-item__type.is-failed::before {
+  background: var(--danger);
+}
+
+.job-item__time {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.job-item__title {
+  overflow: hidden;
+  margin: 3px 0 0 12px;
+  color: var(--ink-2);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 参数区：两列 key/value 网格，数组值拆小 tag（原 global.css 里重复两份的样式收归此处） */
+.job-detail-section + .job-detail-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline);
+}
+
+.job-detail-section__title {
+  margin-bottom: 10px;
+  color: var(--ink-3);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.job-params {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px 14px;
+  align-items: baseline;
+}
+
+.job-params__key {
+  color: var(--ink-3);
+  font-size: var(--fs-note);
+}
+
+.job-params__value {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  color: var(--ink);
+  font-size: var(--fs-note);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.param-tag {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--inset);
+  color: var(--ink-2);
+  font-size: var(--fs-note);
+  font-weight: 400;
+}
+
+.param-tag--more {
+  color: var(--ink-3);
+}
+
+/* 结果摘要：去边框，纯 --inset 底 */
+.result-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.result-item {
+  padding: 10px 12px;
+  background: var(--inset);
+  border-radius: 10px;
+}
+
+.result-item span {
+  display: block;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.result-item strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+@media (max-width: 1100px) {
+  .jobs-layout {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
