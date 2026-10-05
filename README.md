@@ -138,7 +138,7 @@ python tests/smoke_test.py
 | 环境变量 | 作用 | 默认 |
 |---|---|---|
 | `DEEPSEEK_API_KEY` | 启用 Agent 的 DeepSeek 兜底（不配则只用本地规则） | 未设置 |
-| `DEEPSEEK_MODEL` | 模型名 | `deepseek-chat` |
+| `DEEPSEEK_MODEL` | 模型名 | `deepseek-v4.1-flash` |
 | `FILEPILOT_TRASH` | 隔离区兜底位置 | `~/FilePilotTrash` |
 | `FILEPILOT_SCAN_LIMIT` | 单次扫描条目上限 | `400000` |
 
@@ -162,3 +162,4 @@ $env:DEEPSEEK_API_KEY = "your-api-key"
 
 清理、迁移和备份都会真实影响磁盘内容。执行批量操作前先看预览清单，确认目标目录有足够空间。
 所有删除默认先进隔离区，可以在「回收站」页还原。
+

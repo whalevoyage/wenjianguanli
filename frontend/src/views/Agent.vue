@@ -123,8 +123,8 @@ const closePermPopover = () => permPop.value?.hide?.()
 
 const LONG_TEXT = 320
 /* 后端 /api/settings/agent 不可用时的兜底显示 */
-const DEFAULT_MODEL_NAME = 'deepseek-chat'
-const MODEL_OPTIONS_FALLBACK = ['deepseek-chat', 'deepseek-reasoner']
+const DEFAULT_MODEL_NAME = 'deepseek-v4.1-flash'
+const MODEL_OPTIONS_FALLBACK = ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner']
 
 const modelLabel = computed(() => settings.value?.model || status.value?.model || DEFAULT_MODEL_NAME)
 const modelOptions = computed(() => settings.value?.model_options || MODEL_OPTIONS_FALLBACK)
