@@ -1,166 +1,197 @@
-# FilePilot Lite
+# Atlas
 
-个人自用的本地文件管理台。看清整块盘的占用、找出重复和垃圾文件、安全地把文件跨盘搬家，
-整个过程都看得见、可中断、可回滚。
+Atlas 是一个面向 Windows 的本地文件管理与磁盘整理工具。它把“看清磁盘 → 生成预览 → 用户确认 → 执行 → 校验 → 回滚”串成可追踪流程，适合日常清理、查重、迁移、备份和空间分析。
 
-**除「Agent 助手」一页外，全部功能纯本地运行，零 token、可断网。**
+> 除 Agent 的模型问答外，文件扫描、分析、清理、迁移、备份和日志都在本机完成，不需要账号密码。
 
----
+## 项目创新点
+
+### 1. 从“文件工具集合”变成一条可控的处理闭环
+
+Atlas 不把扫描、清理、迁移、回滚做成互相割裂的按钮，而是统一成：**发现问题 → 生成预览 → 用户确认 → 执行 → 校验 → 留痕 → 回滚**。用户始终知道系统准备做什么、已经做了什么，以及出错后能否恢复。
+
+### 2. 把安全设计放进操作流程，而不是停留在提示语
+
+安全不是一个“请谨慎操作”的弹窗，而是落实在路径保护、权限档位、目标空间预检、同名冲突处理、逐文件校验和隔离区机制中。即使用户选择完全访问，项目自身目录和隔离区仍然受到保护。
+
+### 3. “预览优先”的文件整理方式
+
+整理预览、垃圾分级、重复文件分组和迁移计划都先输出可读清单，再允许执行。用户可以先理解结果，再决定是否操作，避免传统清理工具“一键扫描、一键删除”的黑箱体验。
+
+### 4. 本地优先，云端能力可选
+
+扫描、分析、查重、迁移、备份、日志和任务管理默认全部在本机完成，不需要账号，也不依赖云端数据库。Agent 采用本地规则优先策略：常见文件意图零 token 处理，只有无法识别时才调用 DeepSeek。
+
+### 5. 自然语言与确定性文件操作分层
+
+Agent 只负责理解用户意图并生成计划，真正的文件操作仍交给本地业务服务执行。模型不能直接删除、移动或覆盖文件，所有写操作都必须经过本地权限门禁和用户确认，降低模型误判带来的风险。
+
+### 6. 把每个耗时操作都变成可观察任务
+
+扫描和迁移不会卡住界面，而是进入统一任务系统，提供阶段、进度、当前路径、错误、取消和回滚信息。任务中心还会保留历史记录，方便追踪一次操作到底发生了什么。
+
+### 7. 面向真实 Windows 电脑，而不是只针对演示数据
+
+项目考虑了系统目录、桌面保护、跨盘移动、文件占用、同名冲突、磁盘空间不足、长时间任务和用户权限等真实场景，目标是成为可以长期运行在个人电脑上的本地工具。
 
 ## 功能
 
-| 分组 | 页面 | 干什么 |
-|---|---|---|
-| 总览 | 首页 | 各盘容量、可释放空间、最近任务 |
-| 总览 | Agent 助手 | 大白话下命令，翻译成计划后交给本地执行（唯一可能消耗 token） |
-| 分析 | 空间地图 | 矩形树图看占用，点进去逐层钻取 |
-| 分析 | 扫描分析 | 扫整盘或任意目录，统计数量/体积/类型/大文件/长期未动文件 |
-| 分析 | 重复文件 | 三层过滤找出内容相同的文件 |
-| 分析 | 垃圾文件 | 三级安全分级，找临时文件、缓存、日志、空目录 |
-| 执行 | 跨盘迁移 | 复制 → 逐文件校验 → 校验通过才删源，可选保留目录联接 |
-| 执行 | 项目备份 | 打成 ZIP 快照，自动排除依赖与构建产物 |
-| 执行 | 任务中心 | 每个任务一条流程图，实时进度，可中断可回滚 |
-| 记录 | 回收站 | 清理掉的东西先关在这里，可还原到原位 |
-| 记录 | 操作日志 | 完整审计流水，可导出对账 |
+| 页面 | 用途 |
+| --- | --- |
+| 首页 | 磁盘容量、可释放空间、任务统计和最近任务 |
+| Atlas 助手 | 自然语言交互；优先处理文件任务，也能回答普通问题 |
+| 空间地图 | 矩形树图展示目录占用，支持逐层钻取 |
+| 整理预览 | 按类型、时间、体积或项目预览整理结果，全程只读 |
+| 项目雷达 | 识别项目目录，查看类型、体积、文件数和长期未活跃项目 |
+| 扫描分析 | 统计数量、体积、类型分布、大文件和长期未动文件 |
+| 重复文件 | 通过文件大小和哈希查找内容相同的文件 |
+| 垃圾文件 | 识别临时文件、日志、缓存、空目录和 0 字节文件 |
+| 跨盘迁移 | 复制并逐项校验，通过后才处理源文件；支持回滚 |
+| 项目备份 | 创建 ZIP 快照，排除常见依赖和构建目录 |
+| 任务中心 | 查看实时进度、错误、取消和回滚状态 |
+| 回收站 | 文件清理先进隔离区，可恢复到原位置 |
+| 操作日志 | 查看审计记录并导出日志 |
 
----
+## 安全机制
 
-## 架构
+- 清理先生成清单，确认后才进入隔离区，不直接物理删除。
+- 迁移先复制再校验，校验通过后才处理源文件。
+- 耗时操作以后台任务运行，支持查看进度、中断和回滚。
+- 项目自身目录、运行状态目录和隔离区受保护。
+- Windows、Program Files、ProgramData 等系统目录不会被写入。
+- 默认排除 node_modules、.git、__pycache__、.venv、dist、build 等目录。
+- 迁移和备份开始前检查目标空间。
+- 默认只监听 127.0.0.1，不对局域网开放。
 
-```
-浏览器（Vue 3 + Vite + Element Plus）
-        │  HTTP JSON
-        ▼
-FastAPI 路由层（backend/main.py）        只做校验入参 + 创建任务
-        │
-        ▼
-任务管理器（backend/jobs.py）             Job 状态机 + 线程执行 + SSE 进度
-        │
-        ▼
-业务服务层（backend/services/）           scan / duplicates / junk / migrate / clean / backup / agent / overview
-        │
-        ▼
-文件系统工具（backend/fsutil.py）         安全拦截、遍历、哈希、容量、目录树、隔离区
-        │
-        ▼
-JSON 持久层（backend/store.py）           .filepilot/ 下的 jobs.json / logs.json / trash.json / recipes.json
-```
+批量清理或迁移前，请查看预览清单和目标路径；重要文件仍建议另做独立备份。
 
-### 关键设计
+## 安装与使用
 
-- **一切耗时操作都是任务。** 提交后立刻返回 `job_id`，前端用 SSE（`/api/jobs/{id}/stream`）订阅进度。
-  任务状态机：`扫描 → 分析 → 生成清单 → 等待确认 → 执行 → 校验 → 完成`，任何阶段都能中断。
-- **一切危险操作先干跑。** 迁移、清理都先生成清单给你看，确认后才真执行。
-- **一切可回滚。** 每个任务记录它做过的动作（`move` / `copy` / `trash` / `rmdir`），一键逆序还原。
-- **删除默认进隔离区。** 隔离区跟着源文件所在盘走，还原就是一次同盘改名，不会跨盘搬运。
-- **Agent 省钱机制。** 先用本地关键词规则识别意图（零 token）；认不出且配置了 API Key 才调 DeepSeek。
-  识别成功的意图可存成「配方」，下次直接跑，依然零 token。
+### Windows 便携版
 
----
+将完整的 Atlas 文件夹复制到目标电脑，然后运行 `Atlas.exe`。必须保留 `web` 文件夹，不能只复制 exe。启动后访问 `http://127.0.0.1:8000`。
 
-## 安全设计
+便携版不需要目标电脑安装 Python、Node.js 或 npm。用户数据默认保存到 `%LOCALAPPDATA%\Atlas`。
 
-| 机制 | 说明 |
-|---|---|
-| 保护目录 | 桌面、`.workbuddy`、项目自身目录，**任何情况下不可改动** |
-| 系统只读区 | `Windows`、`Program Files`、`ProgramData`、`$Recycle.Bin` 等只允许扫描 |
-| 默认排除 | 12 项（`node_modules`、`.git`、`__pycache__`、`dist`、`build` 等），界面上可增减 |
-| 空间预检 | 迁移 / 备份前检查目标盘剩余空间，不够直接拒绝启动，不动任何文件 |
-| 扫描限流 | 深度限制 + 条目上限 + 可中断，避免把磁盘 IO 打满 |
-| 同名不覆盖 | 目标已存在时自动追加序号 |
+### 从源码运行
 
----
-
-## 目录结构
-
-```text
-FilePilotLite/
-├─ backend/
-│  ├─ main.py            路由层
-│  ├─ config.py          规则库：分类、排除、黑名单、垃圾规则
-│  ├─ fsutil.py          文件系统工具（安全拦截 / 遍历 / 哈希 / 目录树）
-│  ├─ jobs.py            任务模型 + 线程执行 + SSE + 回滚
-│  ├─ store.py           JSON 持久层
-│  └─ services/          各功能实现
-├─ frontend/             Vue 3 前端
-├─ tests/smoke_test.py   端到端冒烟测试（44 项）
-├─ docs/                 设计文档
-├─ start_all.bat         一键启动前后端
-└─ requirements.txt
-```
-
----
-
-## 启动
+环境要求：Windows、Python 3.10+（推荐 3.12）、Node.js 18+。
 
 ```powershell
-# 后端依赖
 python -m pip install -r requirements.txt
-
-# 前端依赖
 cd frontend
-npm install
+npm ci
 cd ..
+.\start_all.bat
 ```
 
-双击 `start_all.bat`，或者分别运行：
+也可分别启动：
 
 ```powershell
-# 终端一
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
-
-# 终端二
 cd frontend
 npm run dev
 ```
 
-- 前端：<http://127.0.0.1:5173>
-- 后端 API：<http://127.0.0.1:8000/api>
-- API 文档：<http://127.0.0.1:8000/docs>
+- 前端：`http://127.0.0.1:5173`
+- API：`http://127.0.0.1:8000/api`
+- Swagger：`http://127.0.0.1:8000/docs`
 
----
+## Agent 助手
 
-## 测试
+Agent 是通用助手，但优先理解文件管理需求。扫描、查重、清理、迁移、备份等请求会生成 Atlas 本地任务计划；身份、模型和其他普通问题会交给模型正常回答。常见文件意图优先由本地规则处理，不消耗 token；未识别且配置了 API Key 时才调用 DeepSeek。任何文件写入、清理和迁移仍须用户确认，并由本地 API 执行。
 
-后端起来之后：
-
-```powershell
-python tests/smoke_test.py
-```
-
-会造一个临时样本目录，覆盖扫描、目录树、查重、垃圾、迁移规划、迁移执行、回滚、
-隔离区还原、日志、Agent 本地意图，共 44 项断言。
-
----
-
-## 可选配置
-
-| 环境变量 | 作用 | 默认 |
-|---|---|---|
-| `DEEPSEEK_API_KEY` | 启用 Agent 的 DeepSeek 兜底（不配则只用本地规则） | 未设置 |
-| `DEEPSEEK_MODEL` | 模型名 | `deepseek-flash` |
-| `FILEPILOT_TRASH` | 隔离区兜底位置 | `~/FilePilotTrash` |
-| `FILEPILOT_SCAN_LIMIT` | 单次扫描条目上限 | `400000` |
+配置示例：
 
 ```powershell
 $env:DEEPSEEK_API_KEY = "your-api-key"
+$env:DEEPSEEK_MODEL = "deepseek-flash"
 ```
 
-不要把真实密钥写入代码或提交到仓库。
+内置模型 ID 包括 `deepseek-flash`、`deepseek-v4-pro`、`deepseek-chat` 和 `deepseek-reasoner`。模型 ID 以服务商当前 API 支持列表为准。不要把真实 API Key 写入代码、截图或 Git 提交。
 
----
+## 架构
 
-## 环境要求
+```text
+Vue 3 + Element Plus
+        │ HTTP JSON / SSE
+        ▼
+FastAPI 路由层（backend/main.py）
+        ▼
+任务管理器（backend/jobs.py）
+        ▼
+业务服务（backend/services/）
+        ▼
+文件系统安全层（backend/fsutil.py）
+        ▼
+本地状态（开发目录 .filepilot 或 %LOCALAPPDATA%\Atlas）
+```
 
-- Python 3.10+（实测 3.12）
-- Node.js 18+
-- Windows（隔离区与系统回收站能力依赖 Windows API）
+耗时操作返回 `job_id`，前端通过 `/api/jobs/{id}/stream` 订阅进度。状态、日志、回收站清单和 Agent 配方保存在本地，不依赖远程数据库。
 
----
+## 项目结构
 
-## 注意事项
+```text
+FilePilotLite/
+├─ backend/       FastAPI 后端、任务系统和业务服务
+├─ frontend/      Vue 3 前端
+├─ packaging/     Windows 打包脚本和安装配置
+├─ tests/         单元、API、UI 和端到端测试
+├─ docs/          设计、审查和迭代文档
+├─ requirements.txt
+└─ start_all.bat  开发环境一键启动
+```
 
-清理、迁移和备份都会真实影响磁盘内容。执行批量操作前先看预览清单，确认目标目录有足够空间。
-所有删除默认先进隔离区，可以在「回收站」页还原。
+## 测试
 
+```powershell
+python -m pytest -q
+```
 
+启动后端后运行综合冒烟测试：
+
+```powershell
+$env:FILEPILOT_API = "http://127.0.0.1:8000/api"
+python tests/smoke_test.py
+```
+
+前端生产构建：
+
+```powershell
+npm run build --prefix frontend
+```
+
+UI 测试可使用 Chromium 或 Edge：
+
+```powershell
+$env:PLAYWRIGHT_CHROMIUM = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+$env:FRONTEND_URL = "http://127.0.0.1:5173"
+python tests/ep_style_audit.py
+python tests/permission_ui_test.py
+python tests/messagebox_style_test.py
+python tests/agent_composer_audit.py
+```
+
+## Windows 打包
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\packaginguild_release.ps1
+```
+
+输出目录为 `release\Atlas`。安装 Inno Setup 后可编译 `release\Atlas.iss` 生成安装向导。
+
+## 配置项
+
+| 环境变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `DEEPSEEK_API_KEY` | Agent 的模型兜底能力 | 未设置 |
+| `DEEPSEEK_MODEL` | DeepSeek 模型 ID | `deepseek-flash` |
+| `FILEPILOT_DATA_DIR` | 覆盖用户数据目录 | 发行版为 `%LOCALAPPDATA%\Atlas` |
+| `FILEPILOT_TRASH` | 指定隔离区兜底位置 | 用户目录下 `FilePilotTrash` |
+| `FILEPILOT_SCAN_LIMIT` | 单次扫描最多处理的条目数 | `400000` |
+
+开发模式默认状态目录为项目根目录的 `.filepilot`；发行版为 `%LOCALAPPDATA%\Atlas`。
+
+## 数据与隐私
+
+Atlas 以本地运行为主。除用户主动启用 DeepSeek 请求外，文件内容、扫描结果和任务状态不会主动上传到远程服务。使用云端模型时，用户输入会发送给所配置的服务商；文件操作仍由本机执行。请勿在对话中输入密码、密钥或其他敏感信息。
