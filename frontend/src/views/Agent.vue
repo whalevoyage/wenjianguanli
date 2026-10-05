@@ -127,7 +127,10 @@ const DEFAULT_MODEL_NAME = 'deepseek-v4.1-flash'
 const MODEL_OPTIONS_FALLBACK = ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner']
 
 const modelLabel = computed(() => settings.value?.model || status.value?.model || DEFAULT_MODEL_NAME)
-const modelOptions = computed(() => settings.value?.model_options || MODEL_OPTIONS_FALLBACK)
+// 兼容旧版后端：旧进程可能只返回 chat/reasoner，前端仍保留当前发行版模型选项。
+const modelOptions = computed(() => [
+  ...new Set([...(settings.value?.model_options || []), ...MODEL_OPTIONS_FALLBACK]),
+])
 
 let stopStream = null
 
