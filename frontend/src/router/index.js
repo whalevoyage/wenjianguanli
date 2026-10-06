@@ -134,8 +134,29 @@ const routes = [
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
-export default createRouter({
+const router = createRouter({
   history: createWebHashHistory(),
   routes,
   scrollBehavior: () => ({ top: 0 }),
 })
+
+/* 13 个页面都是路由级懒加载：Vue Router 会卡住这次导航直到对应 chunk 下载完，
+   所以「没打开过的选项卡」第一次点必然要多等一段，观感就是卡一下 / 闪一下。
+   启动后由 main.js 在空闲时分批把这些模块预热，首访也变成即时切换。
+   注意：预取只加载代码，不挂载组件、不发任何请求，页面里的 onMounted 照旧在真正进入时才跑。 */
+export function collectViewLoaders() {
+  const loaders = []
+  const seen = new Set()
+
+  router.getRoutes().forEach((record) => {
+    const loader = record.components?.default || record.component
+    if (typeof loader === 'function' && !seen.has(loader)) {
+      seen.add(loader)
+      loaders.push(loader)
+    }
+  })
+
+  return loaders
+}
+
+export default router

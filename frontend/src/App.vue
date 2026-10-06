@@ -490,23 +490,24 @@ html:not([data-theme='dark']) .aurora {
   padding: 0;
 }
 
-/* ---------- 页面过渡：新旧重叠的交叉淡入 ----------
-   原来的 mode="out-in" 是「旧页先彻底消失、新页再从 opacity:0 淡入」，
-   中间必然出现一段空白帧（切首页时肉眼就是「白屏一下」，实测 ~250ms）。
-   改成：离场页脱离文档流（absolute）与进场页重叠、两者同时渐变，全程没有空白帧。 */
-.page-enter-active {
-  transition: opacity var(--duration-fast) var(--ease-out);
-}
-
+/* ---------- 页面过渡：旧页在上层淡出，新页首帧即不透明 ----------
+   两版都试过，把结论写死在这里，别再回头改：
+   ① mode="out-in" —— 旧页先彻底消失、新页再从 opacity:0 淡入，中间有空白帧，白屏。
+   ② 两页同时渐变的交叉淡入 —— 旧页 150ms 淡出、新页 250ms 淡入，新页在头 250ms 里
+      始终不是 100% 不透明；而内容区自己没有底色，透出来的是 body 的 --bg（浅色 #f4f5f7 /
+      深色 #1c1c1e），于是就是「白一下 / 黑一下」。
+   正解：进场不做任何动画（下面的 enter 类刻意不写规则），新页第一帧就 100% 不透明；
+   离场页脱离文档流压在上层（z-index:2）淡出。任何一帧都有不透明的页面垫底，
+   结构上不可能再露出应用底色，而视觉上「旧页淡去、新页显形」的过渡感仍在。 */
 .page-leave-active {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
+  z-index: 2;
   transition: opacity var(--duration-quick) var(--ease);
 }
 
-.page-enter-from,
 .page-leave-to {
   opacity: 0;
 }

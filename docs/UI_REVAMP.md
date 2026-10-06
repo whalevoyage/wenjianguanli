@@ -1042,3 +1042,53 @@ EP 的 `.el-alert--info.is-light`（特异性 0,2,0）自带灰底 + `width:100%
 - 浅 / 暗双主题弹层截图（`design/v21_4_perm.png` / `v21_7_dark_perm.png`）✓
 - 自检：Agent.vue 无字面量颜色、无字面量 transition 时长、无 `transition: all` ✓
 - jump-bottom 因现有会话不足一屏（无溢出）未做视觉实测，但定位改为锚定 `.composer-zone`，逻辑上随输入框高度走
+
+## v23：选项卡切换 / 启动的闪白闪黑（2026-10-06）
+
+用户反馈：切选项卡「有的会先白屏一下或者黑屏一下」，且每次打开 Agent 选项卡都先看到「你想让 Atlas 做什么？」空欢迎页。
+验证方式：Playwright + rAF 逐帧探针（不是看截图猜）。
+
+### 根因（三层，同一类病）
+
+| # | 位置 | 问题 |
+|---|---|---|
+| 1 | `App.vue` 的 `.page-enter-*` | 交叉淡入是「旧页 150ms 淡出 + 新页从 `opacity:0` 250ms 淡入」。新页在头 250ms 里始终不是 100% 不透明，而 `.workspace-content` 自己没有底色 → 透出来的是 `body` 的 `--bg`（浅色 `#f4f5f7` / 深色 `#1c1c1e`）。**这就是白一下/黑一下的物理来源** |
+| 2 | 13 个路由级懒加载 | Vue Router 会卡住这次导航直到 chunk 下载完；页面数据又是挂载后才请求 → 没打开过的选项卡首访更慢、首帧还是空壳 |
+| 3 | `main.js` 直接 `mount` | 初始路由的 chunk 还没就绪就挂载 → 先画出一帧「侧栏在、内容区空着」的半成品（实测 3 帧 ≈ 50ms） |
+| 4 | `Agent.vue` hero 条件 `!messages.length` | 记忆恢复是异步的，恢复期间 `messages` 为空 → 空欢迎页先渲染，等记忆回来才被替换。**用户看到的"那个界面"就是这段空窗期** |
+
+### 改法
+
+| 文件 | 改动 |
+|---|---|
+| `App.vue` | 进场**刻意不写任何规则**（新页首帧就 100% 不透明）；离场页 `position:absolute` + `z-index:2` 压在上层淡出。任何一帧都有不透明页面垫底，结构上不可能露出底色，而「旧页淡去、新页显形」的过渡感保留 |
+| `router/index.js` | 新增 `collectViewLoaders()`，导出 13 个页面的 chunk loader |
+| `main.js` | ① `load` 后分批预取全部路由 chunk（间隔 160ms，避免一帧内塞 13 个模块转换）；② 改为 `router.isReady().catch().then(mount)`，首帧就是完整页面 |
+| `Agent.vue` | 新增 `hydrating` 闸门（初始 true）：恢复完成前 hero 与示例胶囊都不渲染；`switchConversation` 也走同一道闸门。`initConversations()` 提到 config/status 之前并行跑 —— 它不依赖那两者，串在后面等于白等 |
+
+### 逐帧验证数据（Playwright rAF 采样，合成模型：背景可见度 = 1 − max(子元素 opacity)）
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| 16 次切换（13 浅色 + 3 深色）`minMaxOpacity` | — | **全部 = 1** |
+| 露出底色的帧数 `leakFrames` | — | **0** |
+| 离场页 z-index | auto | 2（确实压在进场页之上） |
+| 导航提交耗时（点击 → 路由生效） | — | 21–77ms（预取生效，首访不再等 chunk） |
+| 启动「半成品帧」 | 3 帧 | **0 帧**，首屏内容出现从 358ms → 246ms |
+| Agent 页 hero 出现帧数 | — | **0**；135ms 就渲染出 10 条历史消息 |
+| 「新建任务」空态 | — | 仍正常出现（用户主动要空白页，不受闸门影响） |
+
+慢放取帧对照（把离场淡出临时放慢到 1.4s 才抓得到）：`tab_switch_before_check.png`（对照组：整片发白）
+vs `tab_switch_after_check.png`（新页已完整铺底、旧页在上层淡出）。Agent 恢复态：`agent_restore_check.png`。
+
+### 刻意没做的
+
+- **不加 `<KeepAlive>`**：能让切回原地复原，但 13 个页面都靠 `onMounted` 拉数据，常驻后数据会停在离开那一刻，得给 Home/Jobs/Trash/Logs 等逐个补 `onActivated` 节流刷新 —— 收益是「更顺滑」，代价是「数据可能过期」，本轮不做（用户选了只修闪屏）。
+- **不给 `.workspace-content` 加底色**：内容区本来就要透出光晕层，加不透明底会把设计推翻。从「不让新页变半透明」下手才是正解。
+- **Agent 页与其它页的 `is-flush` 内边距差异**（0 vs 28/32/48）在切换瞬间仍是硬切：离场页会在 150ms 内平移 28px。因为它在同步淡出、幅度小于一个圆角，实测不可察觉，不做动画化的补间。
+- **没改默认路由**：程序启动仍落首页，Agent 仍是侧栏第二项。
+
+### 顺带发现（不在本次改动范围）
+
+运行中的后端是**旧进程**（`start_all.bat` 里 uvicorn 没加 `--reload`）：源码已有 `/api/agent/tools`、`/agent/context`、`/agent/prefs`、`/agent/plan`、`/agent/task`、`/agent/observe/*`，但 `openapi.json` 里没有 → 前端这三处 GET 稳定 404（被 catch 掉，功能降级但不报错）。**重启后端即可**。
+
