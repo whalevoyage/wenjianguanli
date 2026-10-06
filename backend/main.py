@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from . import config, diagnostics, fsutil, permissions, scheduler, store
 from .jobs import JOB_TYPES, JobContext, manager
 from .services import (
-    agent, backup, clean, duplicates, junk, migrate, overview, projects, scan, virtual,
+    agent, agent_task, backup, clean, duplicates, junk, migrate, overview, projects, scan, virtual,
 )
 
 app = FastAPI(title="FilePilot Lite API", version="2.0.0")
@@ -163,6 +163,35 @@ class ScheduleRequest(BaseModel):
     next_run_at: str | None = None
 
 
+class AgentPlanRequest(BaseModel):
+    """计划预览：只拆步骤，不创建任务。"""
+    message: str = Field(min_length=1, max_length=4000)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentTaskRequest(BaseModel):
+    """启动多步骤 Agent 任务。
+
+    intent  = plan.intent（统一意图结构）
+    params  = plan.params（动作参数）
+    steps   = 可省略；省略时由后端按 intent 现拆
+    """
+    intent: dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
+    steps: list[dict[str, Any]] | None = None
+    mode: str = "analyze"
+    title: str = ""
+
+
+class AgentPrefsRequest(BaseModel):
+    prefs: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentReviseRequest(BaseModel):
+    """就地修改方案：只传改过的条件键，没传的沿用原值。"""
+    constraints: dict[str, Any] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # 公共
 # ---------------------------------------------------------------------------
@@ -180,6 +209,12 @@ def _launch(job_type: str, title: str, target: str, params: dict, worker: Callab
             raise HTTPException(status_code=400, detail="当前是「只读」档：只允许扫描、预览与生成计划")
     job = manager.create(job_type, title, target, params)
     manager.start(job["id"], worker)
+    # 用户实际用过的目录记进 Agent 的常用路径（第五阶段）。
+    # 这里是「副作用」，任何异常都不能影响任务本身。
+    try:
+        agent.add_common_path(target)
+    except (OSError, ValueError, TypeError):
+        pass
     return {"job_id": job["id"], "job": manager.get(job["id"])}
 
 
@@ -527,6 +562,108 @@ def update_agent_settings(request: AgentSettingsRequest):
     只写 .filepilot/settings.json —— 配方与任务记录都不受影响。
     """
     return agent.update_settings(request.api_key, request.model)
+
+
+# ---------------------------------------------------------------------------
+# Agent 工具层 / 偏好记忆 / 多步骤任务（第一、二、三、五、六阶段）
+# ---------------------------------------------------------------------------
+
+@app.get("/api/agent/tools")
+def agent_tools():
+    """三组工具清单（查询 12 / 执行 9 / 辅助 6）+ 风险档位说明。"""
+    return agent.tools_view()
+
+
+@app.get("/api/agent/context")
+def agent_context():
+    """当前状态快照：任务、权限档、模型配置、磁盘、确认卡、可回滚、隔离区。"""
+    return agent.status_context()
+
+
+@app.get("/api/agent/prefs")
+def get_agent_prefs():
+    return {"prefs": agent.read_prefs(), "tags": config.EXCLUDE_TAGS}
+
+
+@app.post("/api/agent/prefs")
+def update_agent_prefs(request: AgentPrefsRequest):
+    try:
+        return {"prefs": agent.update_prefs(request.prefs), "tags": config.EXCLUDE_TAGS}
+    except (ValueError, TypeError) as exc:
+        raise _friendly(exc)
+
+
+@app.post("/api/agent/plan")
+def agent_plan(request: AgentPlanRequest):
+    """计划预览：把一句话拆成计划树，**不创建任何任务**。"""
+    try:
+        return agent.plan_preview(request.message, request.context)
+    except (ValueError, TypeError) as exc:
+        raise _friendly(exc)
+
+
+@app.post("/api/agent/task")
+def start_agent_task(request: AgentTaskRequest):
+    """启动多步骤任务（只读分析段）。跑完停在「等待确认」。"""
+    intent = request.intent or {}
+    goal = request.title or intent.get("goal") or "Agent 任务"
+    scope = (intent.get("scope") or {}).get("path") or ""
+    params = {
+        "intent": intent,
+        "plan_params": request.params or {},
+        "steps": request.steps,
+        "mode": "analyze",
+    }
+    job = manager.create("agent_task", goal, scope, params)
+    manager.start(job["id"], agent_task.run_agent_task)
+    return {"job_id": job["id"], "job": manager.get(job["id"])}
+
+
+@app.post("/api/agent/task/{job_id}/approve")
+def approve_agent_task(job_id: str):
+    """确认方案 → 在同一个任务里继续执行段。
+
+    写权限在这里只拦一次：只读档直接拒绝，其余档位放行后仍由
+    clean / migrate 服务自己的权限层与隔离区兜底。
+    """
+    if permissions.current() == "readonly":
+        raise HTTPException(status_code=400, detail="当前是「只读」档：只允许分析，不能执行写操作")
+    try:
+        job = manager.get(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="找不到这个任务")
+    if job.get("type") != "agent_task":
+        raise HTTPException(status_code=400, detail="这个任务不是 Agent 多步骤方案")
+    proposal = job.get("proposal") or {}
+    if not proposal.get("action"):
+        raise HTTPException(status_code=400, detail="方案里没有可执行的动作")
+    if not proposal.get("items"):
+        raise HTTPException(status_code=400, detail="清单为空，没有可执行的项目")
+
+    params = {**(job.get("params") or {}), "mode": "execute", "proposal": proposal}
+    manager.update(job_id, params=params, message="已确认，准备执行", force=True)
+    manager.start(job_id, agent_task.run_agent_task)
+    return {"job_id": job_id, "job": manager.get(job_id)}
+
+
+@app.post("/api/agent/task/{job_id}/revise")
+def revise_agent_task(job_id: str, request: AgentReviseRequest):
+    """修改方案：换条件重算，零 token。仍停在「等待确认」，不会自动动文件。"""
+    try:
+        return agent.revise_task(job_id, request.constraints)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="找不到这个任务")
+    except (ValueError, TypeError) as exc:
+        raise _friendly(exc)
+
+
+@app.get("/api/agent/observe/{job_id}")
+def observe_agent_job(job_id: str):
+    """任务结果观察：读成「人话总结 + 失败归因 + 下一步」。零 token。"""
+    try:
+        return agent.observe_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="找不到这个任务")
 
 
 @app.get("/api/recipes")

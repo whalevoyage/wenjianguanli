@@ -36,6 +36,7 @@ JOB_TYPES: dict[str, str] = {
     "migrate": "跨盘迁移",
     "clean": "清理",
     "backup": "项目备份",
+    "agent_task": "Agent 任务",
 }
 
 # 流程可视化的阶段名（前端画流程图用）
@@ -65,6 +66,12 @@ def _blank_job(job_type: str, title: str, target: str, params: dict) -> dict:
         "actions": [],
         "result": None,
         "error": None,
+        # Agent 多步骤任务（agent_task）专用：计划树与待确认方案
+        "steps": [],
+        "step_index": 0,
+        "step_total": 0,
+        "intent": None,
+        "proposal": None,
         "permission": permissions.current(),
         "created_at": fsutil.now_iso(),
         "started_at": None,
@@ -77,6 +84,15 @@ def _blank_job(job_type: str, title: str, target: str, params: dict) -> dict:
 
 class JobCancelled(Exception):
     pass
+
+
+class JobPaused(Exception):
+    """任务主动停在「等待确认」。
+
+    与 JobCancelled 的区别：cancel 是终态，paused 只是挂起——
+    Agent 多步骤任务跑完只读分析后停在这里，用户确认后可以把同一个
+    job_id 再 start 一次继续执行，任务卡不会分裂成两条。
+    """
 
 
 class JobContext:
@@ -305,6 +321,13 @@ class JobManager:
     # -- 执行 -------------------------------------------------------------
     def start(self, job_id: str, worker: Callable[[JobContext], Any]) -> dict:
         job = self.get(job_id)
+        with self._lock:
+            if job.get("status") == JOB_WAITING:
+                # 续跑（例如 Agent 任务确认后继续）：换一条干净的取消信号，
+                # 否则上一轮如果点过取消，续跑会立刻被判定为已取消。
+                self._cancel[job_id] = threading.Event()
+            else:
+                self._cancel.setdefault(job_id, threading.Event())
 
         def runner() -> None:
             ctx = JobContext(self, job_id, self._cancel[job_id])
@@ -333,6 +356,12 @@ class JobManager:
                 store.write_log(job["type"], "已取消", job.get("target", ""),
                                 note=f"取消来源：{job.get("cancel_reason") or "未标注"}",
                                 job_id=job_id, permission=job.get("permission"))
+            except JobPaused:
+                # 挂起而非结束：同一个 job_id 之后可以再次 start 继续
+                self.update(
+                    job_id, status=JOB_WAITING, phase=PHASES[3], phase_index=3,
+                    message="等待你确认后继续", force=True,
+                )
             except Exception as exc:  # noqa: BLE001
                 self.update(
                     job_id, status=JOB_FAILED, message="执行失败", error=fsutil.human_error(exc),

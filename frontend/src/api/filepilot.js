@@ -165,10 +165,40 @@ export const getRecipes = () => unwrap(api.get('/recipes'))
 export const saveRecipe = payload => unwrap(api.post('/recipes', payload))
 export const deleteRecipe = index => unwrap(api.delete(`/recipes/${index}`))
 
-/* ---------------- Agent 模型配置 ----------------
-   接口只回掩码，不回传完整 key；api_key / model 传空串表示清除该字段。 */
+/* ---------------- Agent 配置 ---------------- */
 export const getAgentSettings = () => unwrap(api.get('/settings/agent'))
 export const saveAgentSettings = payload => unwrap(api.post('/settings/agent', payload))
+
+/* ---------------- Agent 工具层 / 状态 / 偏好 ----------------
+   工具清单与状态快照都是纯本地只读，不消耗 token。 */
+
+/** 三组工具清单（查询 12 / 执行 9 / 辅助 6）+ 风险档位说明。 */
+export const getAgentTools = () => unwrap(api.get('/agent/tools'))
+
+/** 当前状态快照：任务、权限档、模型、磁盘、确认卡、可回滚、隔离区。 */
+export const getAgentContext = () => unwrap(api.get('/agent/context'))
+
+/** 偏好记忆（常用路径 / 排除标签 / 永久约束 / 常用策略）。 */
+export const getAgentPrefs = () => unwrap(api.get('/agent/prefs'))
+export const saveAgentPrefs = prefs => unwrap(api.post('/agent/prefs', { prefs }))
+
+/* ---------------- Agent 多步骤任务 ----------------
+   预览只拆步骤、不创建任务；start 只跑只读分析段；
+   approve 才在同一个 job 里继续执行段（写权限在 approve 处再拦一次）。 */
+
+export const planAgentTask = (message, context = {}) =>
+  unwrap(api.post('/agent/plan', { message, context }))
+
+export const startAgentTask = payload => unwrap(api.post('/agent/task', payload))
+
+export const approveAgentTask = jobId => unwrap(api.post(`/agent/task/${encodeURIComponent(jobId)}/approve`))
+
+/** 修改方案：只换条件重算（零 token），仍停在等待确认，不会自动动文件。 */
+export const reviseAgentTask = (jobId, constraints) =>
+  unwrap(api.post(`/agent/task/${encodeURIComponent(jobId)}/revise`, { constraints }))
+
+/** 任务结果观察：读成「人话总结 + 失败归因 + 下一步」，零 token。 */
+export const observeAgentJob = jobId => unwrap(api.get(`/agent/observe/${encodeURIComponent(jobId)}`))
 
 /* ---------------- 权限档位 ----------------
    read / standard / full 三档；切到 full 必须带 confirm: true。 */

@@ -338,6 +338,85 @@ PROJECT_LIMIT = int(os.getenv("FILEPILOT_PROJECT_LIMIT") or 2000)
 VIRTUAL_EXPORT_LIMIT = int(os.getenv("FILEPILOT_EXPORT_LIMIT") or 20000)
 
 
+# ---------------------------------------------------------------------------
+# Agent 偏好记忆、语义排除与风险分级
+#
+# prefs.json 是 Agent 的「长期记忆」，与对话记忆（filepilot.db 的 memory 表）分开：
+# 对话记忆是逐条历史，prefs 是提炼后的结论，用户在 Agent 页可直接查看与编辑。
+# ---------------------------------------------------------------------------
+
+PREFS_FILE = STATE_DIR / "prefs.json"
+
+# 每个会话的「最近一次意图」快照，供「就刚才那个目录」这类上下文指代复用。
+# 只存结论（最近路径 / 最近动作），不存原文；原文在 conversation memory 里。
+AGENT_STATE_FILE = STATE_DIR / "agent_state.json"
+
+# prefs.json 的骨架：首次读取即按此结构补齐缺键，避免前端到处判空
+PREFS_DEFAULT: dict = {
+    "common_paths": [],       # 常用路径 [{"path": "D:\\素材", "note": "自填"}]
+    "exclude_tags": [],       # 常用排除标签，取自 EXCLUDE_TAGS 的键
+    "exclude_paths": [],      # 常用排除的真实路径
+    "hard_rules": [],         # 永久约束 [{"text": "项目都不要动", "action": "*", "path": "D:\\项目"}]
+    "clean_strategies": [],   # 常用清理策略 [{"action": "junk_clean", "then": "duplicate_scan"}]
+    "updated_at": None,
+}
+
+# 语义排除标签 → 目录名剪枝（交给 fsutil.iter_files）+ 常见真实路径（用于事后过滤清单）
+EXCLUDE_TAGS: dict[str, dict] = {
+    "项目文件": {
+        "names": ["node_modules", ".git", ".svn", "__pycache__", ".venv", "venv",
+                  "dist", "build", "target", "vendor", "obj"],
+        "paths": [],
+        "note": "项目目录与依赖目录（配合项目雷达识别出的项目根）",
+    },
+    "照片": {
+        "names": ["Pictures", "图片", "DCIM", "Photos", "相册", "Camera", "Camera Roll"],
+        "paths": ["Pictures", "图片", "DCIM", "Photos"],
+        "note": "个人照片目录",
+    },
+    "视频": {
+        "names": ["Videos", "视频", "Movies", "影片"],
+        "paths": ["Videos", "视频", "Movies"],
+        "note": "个人视频目录",
+    },
+    "文档": {
+        "names": ["Documents", "文档", "我的文档"],
+        "paths": ["Documents", "文档"],
+        "note": "个人文档目录",
+    },
+    "桌面": {
+        "names": ["Desktop", "桌面"],
+        "paths": ["Desktop", "桌面"],
+        "note": "桌面（软保护目录，只读扫描时一并跳过）",
+    },
+    "下载": {
+        "names": ["Downloads", "下载"],
+        "paths": ["Downloads", "下载"],
+        "note": "下载目录",
+    },
+}
+
+# 风险分级：本地确定性计算，不交给模型。见 services/agent_intent.py: compute_risk()
+AGENT_RISK_META: dict[str, dict] = {
+    "low": {"label": "低风险", "note": "只读操作，或结果可完全回滚"},
+    "medium": {"label": "中风险", "note": "会移动或删除文件，但先进隔离区、可恢复"},
+    "high": {"label": "高风险", "note": "涉及系统盘根目录、系统目录或大批量对象"},
+}
+
+# 高风险判定阈值
+AGENT_HIGH_RISK_ITEMS = int(os.getenv("FILEPILOT_AGENT_HIGH_RISK_ITEMS") or 500)
+
+# 多步骤任务的分批执行粒度（每批处理多少项后落一次进度）
+AGENT_BATCH_SIZE = int(os.getenv("FILEPILOT_AGENT_BATCH") or 200)
+
+# 辅助工具「估算耗时」用的经验吞吐（字节/秒），只用于给数量级，不追求精确
+AGENT_ESTIMATE_BYTES_PER_SEC = float(os.getenv("FILEPILOT_AGENT_THROUGHPUT") or (80 * 1024 * 1024))
+
+# 轻量只读查询的上限：Agent 问「这个目录多大」时不能变成一次全盘重扫
+AGENT_QUERY_MAX_ENTRIES = int(os.getenv("FILEPILOT_AGENT_QUERY_MAX") or 120000)
+AGENT_QUERY_MAX_SECONDS = float(os.getenv("FILEPILOT_AGENT_QUERY_SECONDS") or 6.0)
+
+
 def project_marker_for(names) -> str | None:
     """目录里出现任一项目标记就返回项目类型标签，否则 None。
 

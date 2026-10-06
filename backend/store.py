@@ -140,3 +140,69 @@ def save_safety_settings(safety: dict) -> None:
     settings = read_settings()
     settings["safety"] = safety
     save_settings(settings)
+
+
+# ---------------------------------------------------------------------------
+# Agent 偏好记忆（prefs.json）
+#
+# 与对话记忆分开：对话记忆是逐条历史（存在 filepilot.db），prefs 是提炼后的
+# 长期结论（常用路径 / 排除标签 / 永久约束 / 常用策略），用户可在 Agent 页编辑。
+# 读取时按 config.PREFS_DEFAULT 补齐缺键，前端不必到处判空。
+# ---------------------------------------------------------------------------
+
+def read_prefs() -> dict:
+    data = load_json(config.PREFS_FILE, {})
+    if not isinstance(data, dict):
+        data = {}
+    prefs = {key: (list(value) if isinstance(value, list) else value)
+             for key, value in config.PREFS_DEFAULT.items()}
+    for key, value in data.items():
+        prefs[key] = value
+    return prefs
+
+
+def save_prefs(prefs: dict) -> None:
+    save_json(config.PREFS_FILE, prefs)
+
+
+# ---------------------------------------------------------------------------
+# 每个会话的最近一次意图快照（agent_state.json）
+#
+# 只存结论：最近作用范围、最近动作、最近一次任务 id。供「就刚才那个目录」
+# 这类指代复用。原文仍在 conversation memory 里，这里不重复存。
+# 单文件容量不做硬清理，只保留最近 MAX 个会话。
+# ---------------------------------------------------------------------------
+
+AGENT_STATE_KEEP = 30
+
+
+def read_agent_state() -> dict:
+    data = load_json(config.AGENT_STATE_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def get_conversation_state(conversation_id: str) -> dict:
+    state = read_agent_state().get(conversation_id)
+    return state if isinstance(state, dict) else {}
+
+
+def save_conversation_state(conversation_id: str, patch: dict) -> dict:
+    state = read_agent_state()
+    current = state.get(conversation_id)
+    merged = {**(current if isinstance(current, dict) else {}), **patch}
+    state[conversation_id] = merged
+    if len(state) > AGENT_STATE_KEEP:
+        ordered = sorted(
+            state.items(),
+            key=lambda item: str(item[1].get("updated_at") or ""),
+            reverse=True,
+        )[:AGENT_STATE_KEEP]
+        state = dict(ordered)
+    save_json(config.AGENT_STATE_FILE, state)
+    return merged
+
+
+def clear_conversation_state(conversation_id: str) -> None:
+    state = read_agent_state()
+    if state.pop(conversation_id, None) is not None:
+        save_json(config.AGENT_STATE_FILE, state)

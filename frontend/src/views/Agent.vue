@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowDown,
@@ -13,24 +14,36 @@ import {
   MoreFilled,
   Plus,
   Promotion,
+  Setting,
   Star,
   View,
   WarningFilled,
 } from '@element-plus/icons-vue'
 import {
   agentChatStream,
+  approveAgentTask,
+  cancelJob,
   clearAgentMemory,
   deleteRecipe,
+  getAgentContext,
   getAgentMemory,
+  getAgentPrefs,
   getAgentSettings,
   getAgentStatus,
   getRecipes,
+  getTrash,
   listAgentConversations,
+  observeAgentJob,
   renameAgentConversation,
+  restoreTrash,
+  reviseAgentTask,
+  rollbackJob,
+  saveAgentPrefs,
   getSafetySettings,
   saveAgentSettings,
   saveRecipe,
   saveSafetySettings,
+  startAgentTask,
   startBackup,
   startClean,
   startDuplicateScan,
@@ -38,16 +51,20 @@ import {
   startMigrate,
   startScan,
   startTree,
+  startVirtual,
+  startProjectScan,
 } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
 import AgentGlyph from '../components/AgentGlyph.vue'
 import JobProgress from '../components/JobProgress.vue'
+import PlanTree from '../components/PlanTree.vue'
 import { renderMarkdown } from '../utils/miniMarkdown'
 import { formatShortTime } from '../utils/formatters'
 
 const { config, excludes, load: loadConfig } = useConfig()
 const job = useJob('agent')
+const router = useRouter()
 
 const status = ref(null)
 const messages = ref([])
@@ -74,6 +91,12 @@ const conversations = ref([])
 const listHidden = ref(window.innerWidth < 1280)
 /* 已展开的「工作块」消息下标（计划卡默认折叠） */
 const workOpen = ref(new Set())
+/* 「正在从记忆里恢复会话」闸门。
+   欢迎空态的条件是 !messages.length，而恢复是异步的 —— 不闸住的话，
+   每次进这一页都会先闪一张「你想让 Atlas 做什么？」再被真实对话替换掉。
+   初始为 true：首屏在拿到结论（有历史 / 真没有）之前一律不渲染空态。
+   点「新建任务」不受闸门影响 —— 那是用户主动要一张空白页。 */
+const hydrating = ref(true)
 
 function readStoredConversation() {
   try {
@@ -121,6 +144,123 @@ const permissionTone = computed(
 const permPop = ref(null)
 const closePermPopover = () => permPop.value?.hide?.()
 
+/* ------------------------------------------------------------------ 状态感知
+   第六阶段：Agent 侧栏显示「现在处于什么状态」——有几个任务在跑、当前档位、
+   模型配没配、磁盘还剩多少、有没有可回滚的任务。全部本地读，零 token。 */
+const agentContext = ref(null)
+
+async function loadAgentContext() {
+  try {
+    agentContext.value = await getAgentContext()
+  } catch {
+    agentContext.value = null
+  }
+}
+
+const contextChips = computed(() => {
+  const ctx = agentContext.value
+  if (!ctx) return []
+  const chips = []
+  if (ctx.running_count) {
+    chips.push({ id: 'running', text: `${ctx.running_count} 个任务在跑`, tone: 'active' })
+  } else {
+    chips.push({ id: 'idle', text: '空闲', tone: 'quiet' })
+  }
+  if (ctx.waiting_count) chips.push({ id: 'waiting', text: `${ctx.waiting_count} 个待确认`, tone: 'warn' })
+  if (ctx.rollback_count) chips.push({ id: 'rollback', text: `${ctx.rollback_count} 个可回滚`, tone: 'quiet' })
+  const tight = (ctx.disks || []).filter(disk => disk.level !== 'ok').slice(0, 2)
+  for (const disk of tight) {
+    chips.push({ id: `disk-${disk.root}`, text: `${disk.root} 剩 ${disk.free_text}`, tone: 'warn' })
+  }
+  if (ctx.trash?.count) chips.push({ id: 'trash', text: `隔离区 ${ctx.trash.size_text}`, tone: 'quiet' })
+  return chips
+})
+
+/* ---------------------------------------------------------------- 偏好记忆
+   第五阶段：常用路径 / 排除标签 / 永久约束 / 常用策略。用户可直接改。 */
+const prefs = ref(null)
+const excludeTags = ref({})
+const prefsPop = ref(null)
+const prefsSaving = ref(false)
+const newExcludePath = ref('')
+const newHardRule = ref('')
+
+async function loadPrefs() {
+  try {
+    const data = await getAgentPrefs()
+    prefs.value = data.prefs || null
+    excludeTags.value = data.tags || {}
+  } catch {
+    prefs.value = null
+  }
+}
+
+const tagOptions = computed(() =>
+  Object.entries(excludeTags.value).map(([name, spec]) => ({ name, note: spec.note || '' })),
+)
+
+function hasTag(name) {
+  return (prefs.value?.exclude_tags || []).includes(name)
+}
+
+async function persistPrefs(patch) {
+  prefsSaving.value = true
+  try {
+    const data = await saveAgentPrefs(patch)
+    prefs.value = data.prefs || prefs.value
+    ElMessage.success('偏好已保存，下次对话立即生效')
+  } catch (error) {
+    ElMessage.error(error.message)
+  } finally {
+    prefsSaving.value = false
+  }
+}
+
+function toggleTag(name) {
+  const current = prefs.value?.exclude_tags || []
+  const next = current.includes(name) ? current.filter(item => item !== name) : [...current, name]
+  persistPrefs({ exclude_tags: next })
+}
+
+function addExcludePath() {
+  const value = newExcludePath.value.trim()
+  if (!value) return
+  const current = prefs.value?.exclude_paths || []
+  if (current.includes(value)) {
+    ElMessage.info('这条已经在列表里了')
+    return
+  }
+  newExcludePath.value = ''
+  persistPrefs({ exclude_paths: [...current, value] })
+}
+
+function removeExcludePath(value) {
+  persistPrefs({ exclude_paths: (prefs.value?.exclude_paths || []).filter(item => item !== value) })
+}
+
+function addHardRule() {
+  const value = newHardRule.value.trim()
+  if (!value) return
+  const current = prefs.value?.hard_rules || []
+  newHardRule.value = ''
+  persistPrefs({ hard_rules: [...current, { text: value, path: '', action: '*' }] })
+}
+
+function removeHardRule(index) {
+  persistPrefs({ hard_rules: (prefs.value?.hard_rules || []).filter((_, i) => i !== index) })
+}
+
+function clearAllPrefs() {
+  persistPrefs({ common_paths: [], exclude_tags: [], exclude_paths: [], hard_rules: [], clean_strategies: [] })
+}
+
+/** 点常用策略：把当时那句话放回输入框，给用户一次确认机会再发 */
+function useStrategy(item) {
+  draft.value = item.message || item.action || ''
+  prefsPop.value?.hide?.()
+  nextTick(() => composerInput.value?.focus?.())
+}
+
 const LONG_TEXT = 320
 /* 后端 /api/settings/agent 不可用时的兜底显示 */
 const DEFAULT_MODEL_NAME = 'deepseek-flash'
@@ -154,9 +294,176 @@ const jobRunning = computed(() => {
 const jobSummary = computed(() => {
   const item = job.job.value
   if (!item || ['pending', 'running', 'waiting'].includes(item.status)) return ''
-  if (item.status === 'done') return `已完成 · ${item.result?.summary || '任务结果已生成'}`
+  const raw = item.result?.summary
+  // summary 可能是字符串（旧任务）也可能是对象（agent_task 的执行总结）
+  const summary = typeof raw === 'string' ? raw : raw?.message || ''
+  if (item.status === 'done') return summary ? `已完成 · ${summary}` : '任务结果已生成'
   if (item.status === 'cancelled') return '任务已取消'
   return '任务执行失败'
+})
+
+/* ------------------------------------------------------------ 多步骤计划树
+   第三 / 七阶段：目标型指令走 agent_task，一个任务卡从分析一路走到执行。
+   「等待确认」不是终态——同一个 job 在确认后继续跑，撤销也是回滚同一个 job。 */
+
+const jobIsAgentTask = computed(() => job.job.value?.type === 'agent_task')
+const treeOpen = ref(true)
+const treeSteps = computed(() => job.job.value?.steps || [])
+const treeProposal = computed(() => job.job.value?.proposal || {})
+const treeIntent = computed(() => job.job.value?.intent || {})
+const treeEstimate = computed(() => job.job.value?.result?.proposal || {})
+const treeBusy = computed(() => Boolean(jobRunning.value))
+const treeWaiting = computed(() => job.job.value?.status === 'waiting')
+
+/** 消息里带的计划树：还没开始跑，只是先让用户看到会走哪几步 */
+function stepsOf(msg) {
+  return msg.steps || []
+}
+
+/** 这条消息是不是多步骤方案（只有多步骤才显示计划树，单步仍用原来的计划卡） */
+function isMultiStep(msg) {
+  if (!msg.plan || msg.plan.action === 'none') return false
+  return stepsOf(msg).length > 1
+}
+
+function intentOf(msg) {
+  return msg.intent || msg.plan?.intent || {}
+}
+
+function toggleTreeOpen() {
+  treeOpen.value = !treeOpen.value
+}
+
+/** 启动多步骤任务：先只跑只读分析段 */
+async function startPlanTree(msg) {
+  if (jobRunning.value) {
+    ElMessage.warning('有任务正在运行，等它结束再下新计划')
+    return
+  }
+  const plan = msg.plan || {}
+  await job.run(() => startAgentTask({
+    intent: plan.intent || {},
+    params: plan.params || {},
+    steps: stepsOf(msg),
+    title: plan.goal || plan.label || 'Agent 任务',
+  }))
+  loadAgentContext()
+}
+
+/** 确认方案：在同一个任务里继续执行段（写权限在后端 approve 处再拦一次） */
+async function approvePlanTree() {
+  const current = job.job.value
+  if (!current?.id) return
+  const proposal = current.proposal || {}
+  try {
+    await ElMessageBox.confirm(
+      `即将处理 ${proposal.item_count || 0} 项，预计释放 ${proposal.freed_text || '未知'}。` +
+      '删除一律先进隔离区，随时可还原；执行完也可以整体回滚。确认继续？',
+      '确认执行方案',
+      { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '再看看' },
+    )
+  } catch {
+    return
+  }
+  await job.run(() => approveAgentTask(current.id))
+  loadAgentContext()
+}
+
+/** 只执行安全项：把清单里非安全级的项剔掉再确认 */
+async function approveSafeOnly() {
+  const current = job.job.value
+  if (!current?.id) return
+  const proposal = current.proposal || {}
+  const safe = (proposal.items || []).filter(item => !item.level || item.level === 'safe')
+  if (!safe.length) {
+    ElMessage.info('这份清单里没有安全级项目，需要去对应页面手动挑')
+    return
+  }
+  job.job.value = {
+    ...current,
+    proposal: { ...proposal, items: safe, item_count: safe.length, safe_only: true },
+  }
+  await approvePlanTree()
+}
+
+/** 修改方案（就地改条件）：换条件重算，零 token，仍在同一个任务里。 */
+const reviseBusy = ref(false)
+
+async function revisePlan(patch) {
+  const current = job.job.value
+  if (!current?.id) return
+  reviseBusy.value = true
+  try {
+    const started = await job.run(() => reviseAgentTask(current.id, patch))
+    if (started) ElMessage.success('已按新条件重算，跑完还要你确认')
+  } catch (error) {
+    ElMessage.error(error.message)
+  } finally {
+    reviseBusy.value = false
+  }
+}
+
+/** 修改方案：把原话放回输入框，让用户改条件重来 */
+function modifyPlan() {
+  const source = [...messages.value].reverse().find(item => item.role === 'user')
+  draft.value = source?.text || ''
+  ElMessage.info('在输入框里改条件再发一次，我会重新出一版方案')
+  nextTick(() => composerInput.value?.focus?.())
+}
+
+/** 撤销本次计划：停掉正在挂起/运行的任务 */
+async function discardPlan() {
+  try {
+    await ElMessageBox.confirm(
+      '撤销本次计划会停掉这个任务。已经进隔离区的文件仍留在隔离区，可以恢复。',
+      '撤销本次计划',
+      { type: 'warning', confirmButtonText: '撤销', cancelButtonText: '继续执行' },
+    )
+  } catch {
+    return
+  }
+  await job.cancel()
+  loadAgentContext()
+}
+
+function showPlanDetails() {
+  const current = job.job.value
+  if (!current?.id) return
+  router.push({ path: '/jobs', query: { job: current.id } })
+}
+
+/** 任务落终态后，用本地模板把它读成一条人话总结，追加进对话 */
+async function reportObservation(item) {
+  if (!item?.id || item.type !== 'agent_task') return
+  try {
+    const observation = await observeAgentJob(item.id)
+    messages.value.push({
+      role: 'assistant',
+      source: 'local',
+      tokens: 0,
+      message: observation.message || '任务已结束',
+      plan: null,
+      pending: false,
+      stopped: false,
+    })
+    scrollToBottom()
+  } catch {
+    /* 观察失败不打断主流程 */
+  }
+  loadAgentContext()
+}
+
+/* 任务状态变化：分析段跑完 → 刷新状态条；执行段跑完 → 追加一条总结 */
+watch(() => job.job.value?.status, (next, prev) => {
+  if (!next || next === prev) return
+  if (next === 'waiting') {
+    treeOpen.value = true
+    ElMessage.success('分析完成，方案已生成，等你确认')
+  }
+  if (['done', 'failed', 'cancelled'].includes(next)) {
+    loadAgentContext()
+    reportObservation(job.job.value)
+  }
 })
 
 /* ------------------------------------------------------------ 滚动与折叠 */
@@ -458,7 +765,7 @@ async function switchConversation(id) {
   conversationId.value = id
   persistConversation(id)
   resetView()
-  await restoreConversation()
+  await loadConversationMemory()
 }
 
 /* 删除某条历史会话 */
@@ -502,6 +809,16 @@ async function restoreConversation() {
   }
 }
 
+/* 恢复会话 + 开合闸门：切换会话和首次进入都走这里 */
+async function loadConversationMemory() {
+  hydrating.value = true
+  try {
+    await restoreConversation()
+  } finally {
+    hydrating.value = false
+  }
+}
+
 /* 启动：先拉会话列表，再决定当前会话 ——
    沿用「上次那条且确有内容」的；否则接最近一条历史；都没有才新开。 */
 async function initConversations() {
@@ -511,7 +828,7 @@ async function initConversations() {
   const id = known ? stored : conversations.value[0]?.conversation_id || stored || newConversationId()
   conversationId.value = id
   persistConversation(id)
-  await restoreConversation()
+  await loadConversationMemory()
 }
 
 async function copyText(text) {
@@ -563,6 +880,8 @@ function paramText(key, value) {
 function writeButtonLabel(plan) {
   if (!plan.write) return '执行这个计划'
   if (plan.action === 'backup') return '开始备份'
+  if (plan.action === 'trash_restore') return '恢复这个文件'
+  if (plan.action === 'job_rollback') return '回滚这个任务'
   return '出清单待确认'
 }
 
@@ -691,15 +1010,89 @@ async function executePlan(plan) {
   const params = plan.params || {}
   const base = { excludes: excludes.value }
 
+  const tabActions = {
+    open_tab: params.route,
+    overview: '/',
+    jobs_list: '/jobs',
+    trash_list: '/trash',
+    logs_list: '/logs',
+  }
+  if (tabActions[plan.action]) {
+    router.push(tabActions[plan.action])
+    return
+  }
+
   // 只读档拦写类计划：在入口说明，不等任务跑到一半才失败
   if (plan.write && permissionMode.value === 'readonly') {
     ElMessage.warning('当前是只读档，写类操作不可用；切到「标准」档再试')
     return
   }
 
+  // ---- 任务控制与隔离区恢复：不新起任务，直接作用于已经存在的东西 ----
+  // 这三个动作在工具注册表里（执行工具 9 条含取消/回滚/恢复），
+  // 所以计划卡上必须有对应的落点，不能点了只说「暂时不能执行」。
+  if (plan.action === 'trash_restore') {
+    const wanted = String(params.path || '').toLowerCase()
+    const data = await getTrash().catch(() => ({ entries: [] }))
+    const entries = data.entries || []
+    const hit = (wanted && entries.find(item => String(item.original || '').toLowerCase() === wanted)) || entries[0]
+    if (!hit) {
+      ElMessage.warning('隔离区里没有可恢复的项目')
+      return
+    }
+    try {
+      const result = await restoreTrash([hit.id])
+      ElMessage.success(`已恢复 ${result.restored_count ?? 1} 项到原位置`)
+      loadAgentContext()
+    } catch (error) {
+      ElMessage.error(error.message)
+    }
+    return
+  }
+
+  if (plan.action === 'job_cancel' || plan.action === 'job_rollback') {
+    const ctx = agentContext.value || {}
+    const tracked = job.job.value
+    if (plan.action === 'job_cancel') {
+      const runningTracked = tracked && ['running', 'pending', 'waiting'].includes(tracked.status)
+      const targetId = (runningTracked && tracked.id) || (ctx.running || [])[0]?.id || ''
+      if (!targetId) {
+        ElMessage.info('现在没有正在运行的任务')
+        return
+      }
+      try {
+        await cancelJob(targetId, 'Agent 计划')
+        ElMessage.success('已请求中断该任务')
+        loadAgentContext()
+      } catch (error) {
+        ElMessage.error(error.message)
+      }
+      return
+    }
+    const targetId = (ctx.rollbackable || [])[0]?.id || ''
+    if (!targetId) {
+      ElMessage.info('没有可回滚的任务')
+      return
+    }
+    try {
+      const result = await rollbackJob(targetId)
+      ElMessage.success(`已回滚 ${result.restored_count ?? 0} 项`)
+      loadAgentContext()
+    } catch (error) {
+      ElMessage.error(error.message)
+    }
+    return
+  }
+
   let starter = null
   if (plan.action === 'scan') starter = () => startScan({ ...base, path: params.path })
   if (plan.action === 'tree') starter = () => startTree({ ...base, path: params.path, depth: 2 })
+  if (plan.action === 'virtual_preview') {
+    starter = () => startVirtual({ ...base, path: params.path, group_by: params.group_by || 'type', min_size: params.min_size_mb ? params.min_size_mb * 1024 * 1024 : 0 })
+  }
+  if (plan.action === 'projects_scan') {
+    starter = () => startProjectScan({ ...base, path: params.path, zombie_days: params.zombie_days || 180, max_depth: params.max_depth || 0 })
+  }
   if (plan.action === 'duplicate_scan') starter = () => startDuplicateScan({ ...base, path: params.path })
   if (plan.action === 'junk_scan') starter = () => startJunkScan({ ...base, path: params.path })
   if (plan.action === 'migrate_plan') {
@@ -920,10 +1313,17 @@ function onResize() {
 onMounted(async () => {
   onResize()
   window.addEventListener('resize', onResize)
+  /* 会话恢复不依赖 config / status，放最前面并行跑。
+     串在后面的话，后端刚启动时要等两轮请求才轮到它 —— 那段时间用户看着的就是空页面。 */
+  initConversations().catch(() => {
+    /* 后端还没起来时列表和记忆都会失败，闸门必须放行，否则一直空着 */
+    hydrating.value = false
+  })
   await loadConfig().catch(() => {})
   await reloadStatus()
   loadRecipes()
-  initConversations()
+  loadPrefs()
+  loadAgentContext()
 })
 
 onBeforeUnmount(() => {
@@ -993,10 +1393,126 @@ onBeforeUnmount(() => {
             <span class="agent-head__title" :title="conversationTitle">{{ conversationTitle }}</span>
             <span v-if="headSubtitle" class="agent-head__sub">{{ headSubtitle }}</span>
           </div>
+
+          <span class="agent-head__spacer"></span>
+
+          <!-- 状态感知条：任务 / 待确认 / 可回滚 / 磁盘吃紧 / 隔离区占用 -->
+          <div v-if="contextChips.length" class="agent-chips">
+            <span
+              v-for="chip in contextChips"
+              :key="chip.id"
+              class="agent-chip"
+              :class="`is-${chip.tone}`"
+            >{{ chip.text }}</span>
+          </div>
+
+          <!-- 偏好记忆：Agent 长期记住的东西，用户可直接增删 -->
+          <el-popover ref="prefsPop" placement="bottom-end" :width="360" trigger="click">
+            <template #reference>
+              <button type="button" class="agent-head__icon" title="偏好记忆">
+                <el-icon :size="15"><Setting /></el-icon>
+              </button>
+            </template>
+            <div class="prefs">
+              <div class="prefs__title">偏好记忆</div>
+              <p class="prefs__note">这些结论会随每次对话一起交给 Agent，改完立即生效。</p>
+
+              <div class="prefs__section">
+                <div class="prefs__label">长期排除标签</div>
+                <div class="prefs__tags">
+                  <button
+                    v-for="tag in tagOptions"
+                    :key="tag.name"
+                    type="button"
+                    class="prefs__tag"
+                    :class="{ 'is-on': hasTag(tag.name) }"
+                    :disabled="prefsSaving"
+                    :title="tag.note"
+                    @click="toggleTag(tag.name)"
+                  >{{ tag.name }}</button>
+                </div>
+              </div>
+
+              <div class="prefs__section">
+                <div class="prefs__label">长期排除路径</div>
+                <ul v-if="prefs?.exclude_paths?.length" class="prefs__list">
+                  <li v-for="item in prefs.exclude_paths" :key="item">
+                    <span class="prefs__path" :title="item">{{ item }}</span>
+                    <button type="button" @click="removeExcludePath(item)">移除</button>
+                  </li>
+                </ul>
+                <div v-else class="prefs__empty">还没有，加一条就不会再被 Agent 碰到</div>
+                <div class="prefs__add">
+                  <el-input
+                    v-model="newExcludePath"
+                    size="small"
+                    placeholder="例如 D:\素材"
+                    @keyup.enter="addExcludePath"
+                  />
+                  <el-button size="small" plain :disabled="prefsSaving" @click="addExcludePath">添加</el-button>
+                </div>
+              </div>
+
+              <div class="prefs__section">
+                <div class="prefs__label">永久约束</div>
+                <ul v-if="prefs?.hard_rules?.length" class="prefs__list">
+                  <li v-for="(rule, index) in prefs.hard_rules" :key="`${rule.text}-${index}`">
+                    <span class="prefs__path">{{ rule.text || rule.path }}</span>
+                    <button type="button" @click="removeHardRule(index)">移除</button>
+                  </li>
+                </ul>
+                <div v-else class="prefs__empty">例如「项目都不要动」，之后 Agent 会一直遵守</div>
+                <div class="prefs__add">
+                  <el-input
+                    v-model="newHardRule"
+                    size="small"
+                    placeholder="例如 项目都不要动"
+                    @keyup.enter="addHardRule"
+                  />
+                  <el-button size="small" plain :disabled="prefsSaving" @click="addHardRule">添加</el-button>
+                </div>
+              </div>
+
+              <div class="prefs__section" v-if="prefs?.clean_strategies?.length">
+                <div class="prefs__label">常用清理策略</div>
+                <ul class="prefs__list">
+                  <li v-for="item in prefs.clean_strategies.slice(0, 5)" :key="`${item.action}-${item.path}`">
+                    <button type="button" class="prefs__replay" :title="item.path" @click="useStrategy(item)">
+                      {{ item.message || item.action }}
+                    </button>
+                    <span class="prefs__meta">{{ item.at ? formatShortTime(item.at) : '' }}</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div class="prefs__section" v-if="prefs?.common_paths?.length">
+                <div class="prefs__label">常用路径</div>
+                <div class="prefs__chips">
+                  <button
+                    v-for="item in prefs.common_paths.slice(0, 8)"
+                    :key="item.path"
+                    type="button"
+                    :title="item.path"
+                    @click="draft = item.path"
+                  >{{ item.path }}</button>
+                </div>
+              </div>
+
+              <div class="prefs__footer">
+                <span class="prefs__meta">
+                  {{ prefs?.updated_at ? `更新于 ${formatShortTime(prefs.updated_at)}` : '尚未记录' }}
+                </span>
+                <button type="button" class="prefs__clear" :disabled="prefsSaving" @click="clearAllPrefs">
+                  清空记忆
+                </button>
+              </div>
+            </div>
+          </el-popover>
         </header>
 
-        <!-- 空态：标记 + 大标题居中，输入框落在下方 -->
-        <div v-if="!messages.length" class="agent-hero">
+        <!-- 空态：标记 + 大标题居中，输入框落在下方。
+             hydrating 期间两者都不渲染（只留空白的对话区），等记忆拉回来再决定是空态还是对话。 -->
+        <div v-if="!messages.length && !hydrating" class="agent-hero">
           <AgentGlyph class="agent-hero__mark" :size="64" />
           <h1 class="agent-hero__title">你想让 <span class="agent-hero__brand">Atlas</span> 做什么？</h1>
         </div>
@@ -1025,7 +1541,71 @@ onBeforeUnmount(() => {
               {{ isCollapsed(index) ? '展开全文' : '收起' }}
             </button>
 
-            <div v-if="msg.plan && msg.plan.action !== 'none'" class="work" :class="{ 'is-write': msg.plan.write }">
+            <div v-if="msg.type === 'clarify'" class="agent-clarify">
+              <strong>{{ msg.question || '还需要补充一些信息' }}</strong>
+              <div v-if="msg.missing?.length" class="agent-clarify__missing">
+                缺少：{{ msg.missing.join('、') }}
+              </div>
+              <div v-if="msg.options?.length" class="agent-clarify__options">
+                <button
+                  v-for="option in msg.options"
+                  :key="option.id"
+                  type="button"
+                  @click="send(option.label)"
+                >
+                  <span class="agent-clarify__option-label">{{ option.label }}</span>
+                  <span v-if="option.note" class="agent-clarify__option-note">{{ option.note }}</span>
+                </button>
+              </div>
+              <ul v-if="msg.fields?.length" class="agent-clarify__fields">
+                <li v-for="field in msg.fields" :key="field.id">{{ field.question }}</li>
+              </ul>
+              <div v-if="msg.suggestions?.length" class="agent-clarify__suggestions">
+                <button
+                  v-for="suggestion in msg.suggestions"
+                  :key="suggestion"
+                  type="button"
+                  @click="send(suggestion)"
+                >
+                  {{ suggestion }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 多步骤方案：先把计划树摊开，点了才真正开始分析 -->
+            <div v-if="isMultiStep(msg)" class="plan-draft">
+              <PlanTree
+                :steps="stepsOf(msg)"
+                :intent="intentOf(msg)"
+                :constraints="msg.plan.constraints || {}"
+                :estimate="msg.plan.estimate || {}"
+                :proposal="{}"
+                :busy="!!jobRunning"
+                :waiting="false"
+                :permission-mode="permissionMode"
+                @modify="modifyPlan"
+                @details="showPlanDetails"
+              />
+              <div class="plan-draft__actions">
+                <el-button
+                  size="small"
+                  type="primary"
+                  :icon="Promotion"
+                  :disabled="!!jobRunning"
+                  @click="startPlanTree(msg)"
+                >
+                  开始分析（{{ stepsOf(msg).length }} 步）
+                </el-button>
+                <el-button size="small" plain :icon="Star" @click="saveAsRecipe(msg)">存成配方</el-button>
+                <span class="plan-draft__note">分析全程只读，出方案后还要你确认</span>
+              </div>
+            </div>
+
+            <div
+              v-else-if="msg.plan && msg.plan.action !== 'none'"
+              class="work"
+              :class="{ 'is-write': msg.plan.write }"
+            >
               <button type="button" class="work__head" @click="toggleWork(index)">
                 <el-icon :size="13" class="work__caret" :class="{ 'is-open': workOpen.has(index) }">
                   <ArrowRight />
@@ -1082,11 +1662,38 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- 运行中的任务：内联进度卡（左侧主色竖条，与对话气泡区分） -->
-        <div v-if="jobRunning" class="job-card">
+        <!-- 运行中的任务：内联进度卡（左侧主色竖条，与对话气泡区分）。
+             多步骤方案走计划树——同一个任务卡从分析一路显示到执行。 -->
+        <div v-if="jobRunning && jobIsAgentTask" class="job-card is-plan">
+          <PlanTree
+            :steps="treeSteps"
+            :intent="treeIntent"
+            :proposal="treeProposal"
+            :estimate="treeEstimate"
+            :constraints="treeIntent.constraints || {}"
+            :tag-options="tagOptions"
+            :busy="treeBusy"
+            :waiting="treeWaiting"
+            :editable="treeWaiting"
+            :revise-busy="reviseBusy"
+            :permission-mode="permissionMode"
+            :open="treeOpen"
+            @toggle="value => (treeOpen = value)"
+            @execute="approvePlanTree"
+            @safe-only="approveSafeOnly"
+            @modify="modifyPlan"
+            @revise="revisePlan"
+            @discard="discardPlan"
+            @details="showPlanDetails"
+          />
+          <p v-if="treeWaiting" class="job-card__hint">
+            方案已生成。删除一律先进隔离区，执行完也可以整体回滚——你确认前什么都不会动。
+          </p>
+        </div>
+        <div v-else-if="jobRunning" class="job-card">
           <JobProgress :job="jobRunning" @cancel="job.cancel" @rollback="job.rollback" />
         </div>
-        <div v-else-if="jobSummary" class="job-summary">
+        <div v-else-if="jobSummary && !jobIsAgentTask" class="job-summary">
           {{ jobSummary }}
           <button type="button" @click="$router.push('/jobs')">查看 →</button>
         </div>
@@ -1126,8 +1733,8 @@ onBeforeUnmount(() => {
           未配置 DEEPSEEK_API_KEY，当前仅本地规则可用
         </div>
 
-        <!-- 示例胶囊放在输入框上方当引导条 -->
-        <div v-if="!messages.length" class="examples">
+        <!-- 示例胶囊放在输入框上方当引导条（恢复会话期间同样不闪） -->
+        <div v-if="!messages.length && !hydrating" class="examples">
           <button v-for="item in EXAMPLES" :key="item" type="button" class="example" @click="send(item)">
             {{ item }}
           </button>
@@ -1891,6 +2498,197 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
+.agent-head__spacer {
+  flex: 1;
+}
+
+/* ------------------------------------------- 状态感知条（第六阶段）
+   任务 / 待确认 / 可回滚 / 磁盘吃紧 / 隔离区占用，全部本地读、零 token。 */
+.agent-chips {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  max-width: 60%;
+  overflow: hidden;
+}
+
+.agent-chip {
+  flex: none;
+  padding: 2px 9px;
+  color: var(--ink-3);
+  font-size: var(--agent-fs-sm);
+  white-space: nowrap;
+  background: var(--inset);
+  border-radius: var(--radius-pill);
+}
+
+.agent-chip.is-active {
+  color: var(--primary-ink);
+  background: var(--primary-soft);
+}
+
+.agent-chip.is-warn {
+  color: var(--warning-ink);
+  background: var(--warning-soft);
+}
+
+/* --------------------------------------------- 偏好记忆面板（第五阶段） */
+.prefs {
+  display: grid;
+  gap: 12px;
+}
+
+.prefs__title {
+  color: var(--ink);
+  font-size: var(--agent-fs-body-tight);
+  font-weight: 600;
+}
+
+.prefs__note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--agent-fs-md);
+  line-height: 1.6;
+}
+
+.prefs__section {
+  display: grid;
+  gap: 6px;
+}
+
+.prefs__label {
+  color: var(--ink-2);
+  font-size: var(--agent-fs-md);
+}
+
+.prefs__tags,
+.prefs__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.prefs__tag {
+  padding: 3px 10px;
+  color: var(--ink-2);
+  font-size: var(--agent-fs-md);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: color var(--duration-quick) var(--ease), background-color var(--duration-quick) var(--ease);
+}
+
+.prefs__tag:hover {
+  color: var(--ink);
+  background: var(--inset);
+}
+
+.prefs__tag.is-on {
+  color: var(--primary-ink);
+  background: var(--primary-soft);
+  border-color: var(--primary-soft);
+}
+
+.prefs__list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prefs__list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--agent-fs-md);
+}
+
+.prefs__path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prefs__list button,
+.prefs__clear {
+  padding: 0;
+  color: var(--ink-3);
+  font-size: var(--agent-fs-md);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.prefs__list button:hover,
+.prefs__clear:hover {
+  color: var(--danger-ink);
+}
+
+.prefs__empty {
+  color: var(--ink-4);
+  font-size: var(--agent-fs-md);
+}
+
+.prefs__add {
+  display: flex;
+  gap: 6px;
+}
+
+.prefs__chips button {
+  max-width: 100%;
+  padding: 2px 8px;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: var(--agent-fs-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--inset);
+  border: 0;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
+.prefs__chips button:hover {
+  color: var(--ink);
+}
+
+.prefs__replay {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--agent-fs-md);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.prefs__replay:hover {
+  color: var(--primary-ink);
+}
+
+.prefs__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.prefs__meta {
+  color: var(--ink-4);
+  font-size: var(--agent-fs-md);
+}
+
 /* --------------------------------------------- 计划卡（可折叠「工作块」） */
 .work {
   margin-top: 12px;
@@ -2192,6 +2990,40 @@ onBeforeUnmount(() => {
   font-size: var(--agent-fs-body-tight);
   font-variant-numeric: tabular-nums;
   word-break: break-all;
+}
+
+.agent-clarify {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: var(--inset);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-ctl);
+}
+
+.agent-clarify__missing {
+  color: var(--ink-3);
+  font-size: var(--fs-note);
+}
+
+.agent-clarify__suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-clarify__suggestions button {
+  padding: 5px 9px;
+  color: var(--primary-ink);
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
+.agent-clarify__suggestions button:hover {
+  background: var(--primary-soft);
 }
 
 .plan-actions {
@@ -2721,5 +3553,80 @@ onBeforeUnmount(() => {
 
   /* 「回到底部」不再需要单独的移动端定位：它挂在 .composer-zone 上沿，
      而输入区在窄屏本身就是 sticky 贴底的，跟着走就对。 */
+}
+
+/* --------------------------------------- 澄清卡的选项与字段（第四阶段）
+   选项式追问：把选择摆出来，点一下就能继续，不用手打一遍。 */
+.agent-clarify__options {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.agent-clarify__options button {
+  display: grid;
+  gap: 1px;
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--agent-radius-control);
+  cursor: pointer;
+  transition: background-color var(--duration-quick) var(--ease);
+}
+
+.agent-clarify__options button:hover {
+  background: var(--inset);
+}
+
+.agent-clarify__option-label {
+  color: var(--ink);
+  font-size: var(--agent-fs-body-tight);
+}
+
+.agent-clarify__option-note {
+  color: var(--ink-3);
+  font-size: var(--agent-fs-md);
+}
+
+.agent-clarify__fields {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--ink-3);
+  font-size: var(--agent-fs-md);
+  line-height: 1.7;
+}
+
+/* ------------------------------------------- 计划树：草稿态与任务态 */
+.plan-draft {
+  margin-top: 12px;
+}
+
+.plan-draft__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.plan-draft__note {
+  color: var(--ink-3);
+  font-size: var(--agent-fs-md);
+}
+
+/* 计划树自带边框，任务态去掉原来的蓝边与投影，避免两层框叠在一起 */
+.job-card.is-plan {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.job-card__hint {
+  margin: 8px 0 0;
+  color: var(--ink-3);
+  font-size: var(--agent-fs-md);
+  line-height: 1.6;
 }
 </style>
