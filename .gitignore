@@ -38,6 +38,8 @@ jobs_redesign_light.png
 tip_dot_check.png
 _bg_*.png
 frontend/_jobs_probe.cjs
+# Agent 验证脚本的截图产物（脚本本身仍需入库）
+_agent_test/shots/
 
 # Design/review screenshots (not runtime source)
 design/*.png
