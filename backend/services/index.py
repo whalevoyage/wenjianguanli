@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import time
+from datetime import datetime
 from .. import config, database, fsutil
 from ..jobs import JobContext
 
@@ -245,14 +247,51 @@ def query(keyword: str, limit: int | None = None, root_id: str = "") -> dict:
     }
 
 
+def _age_days(stamp: str) -> int | None:
+    """索引时间过去了多少天；解析不出来返回 None（不知道就不猜）。"""
+    if not stamp:
+        return None
+    try:
+        then = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    return max(0, int((datetime.now().astimezone() - then).total_seconds() // 86400))
+
+
 def status() -> dict:
-    """索引现状：有没有可用的 FTS5、已索引哪些目录、一共多少文件。"""
+    """索引现状：有没有可用的 FTS5、已索引哪些目录、一共多少文件、有没有过期的。
+
+    **只报"过期"，不自动重建** —— 重建是个可能跑很久的任务，
+    自用工具不该在用户没点过的情况下自己发起。
+    """
     roots = database.search_roots(config.DATABASE_FILE)
+    stale_days = config.SEARCH_STALE_DAYS
+    for root in roots:
+        root["age_days"] = _age_days(root.get("indexed_at") or "")
+        root["stale"] = root["age_days"] is not None and root["age_days"] >= stale_days
     return {
         "enabled": database.search_available(config.DATABASE_FILE),
         "roots": roots,
         "total_files": sum(int(root.get("file_count") or 0) for root in roots),
+        "stale_days": stale_days,
+        "any_stale": any(root["stale"] for root in roots),
     }
+
+
+def reveal(value: str) -> dict:
+    """在系统的资源管理器里定位到这个文件（选中它）。
+
+    护栏：**只允许定位已经索引过的文件** —— 这个接口会去调系统 shell，
+    不能被当成"探任意路径是否存在"的通道。
+    """
+    target = fsutil.normalize(value)
+    if not target.exists():
+        raise FileNotFoundError(f"文件不存在：{target}")
+    if not database.search_known(config.DATABASE_FILE, str(target)):
+        raise ValueError("这个文件不在当前索引里 —— 先给它所在的目录建一次索引")
+    # 只有 Windows 形态会走到这里（项目只有 Windows 版）
+    subprocess.Popen(["explorer", "/select,", str(target)])
+    return {"ok": True, "path": str(target)}
 
 
 def remove_root(value: str) -> dict:

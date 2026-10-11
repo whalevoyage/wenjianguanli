@@ -71,7 +71,7 @@ class SearchIndexRequest(BaseModel):
     max_depth: int = Field(default=0, ge=0)
 
 
-class SearchRootRequest(BaseModel):
+class SearchPathRequest(BaseModel):
     path: str
 
 
@@ -541,10 +541,23 @@ def search_status():
 
 
 @app.post("/api/search/remove")
-def remove_search_root(request: SearchRootRequest):
+def remove_search_root(request: SearchPathRequest):
     """忘掉某个目录的索引（目录本身可能已经被删掉了，所以这里不校验存在性）。"""
     try:
         return index.remove_root(request.path)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+
+
+@app.post("/api/search/reveal")
+def reveal_search_hit(request: SearchPathRequest):
+    """在资源管理器里选中这个文件。
+
+    **只允许定位已索引过的文件** —— 这条会去调系统 shell，
+    不能变成"探任意路径是否存在"的通道。
+    """
+    try:
+        return index.reveal(request.path)
     except (OSError, ValueError) as exc:
         raise _friendly(exc)
 

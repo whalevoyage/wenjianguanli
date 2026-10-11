@@ -6,7 +6,7 @@
     FILEPILOT_API=http://127.0.0.1:8000/api python tests/smoke_test.py
 
 会用临时目录造样本，覆盖：扫描 / 目录树 / 整理预览（含导出） / 项目雷达 / 查重 / 垃圾 /
-迁移规划 / 迁移执行 / 回滚 / 隔离区还原 / 日志 / Agent 本地意图。
+**全文检索** / 迁移规划 / 迁移执行 / 回滚 / 隔离区还原 / 日志 / Agent 本地意图。
 
 ⚠️ **必须对着「工作目录 = 本仓库」的后端跑**（dev 或 `uvicorn backend.main:app`）。
 「保护目录护栏」那 3 项会把样本建在**仓库根**下（`_smoke_protected`），
@@ -23,6 +23,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -274,6 +275,46 @@ def main() -> int:
     check("识别出日志/临时/0字节/空目录",
           {"note.log", "scratch.tmp", "zero.dat", "empty_dir"} <= safe_names, str(sorted(safe_names)))
     check("safe 级默认有可释放体积", (result.get("safe_size") or 0) >= 0, result.get("safe_size_text", ""))
+
+    # ---- 全文检索 ----
+    # ★ 用**另一个**样本目录，不去动 build_fixture 那个 —— 上面扫描/查重/垃圾/迁移的断言
+    #   都写死了文件数与条数，往里加一个文件就会全崩。
+    print("\n[全文检索]")
+    sdir = fixture.parent / "filepilot_smoke_search"
+    shutil.rmtree(sdir, ignore_errors=True)
+    sdir.mkdir(parents=True)
+    (sdir / "玉米表型测量报告.md").write_text(
+        "这是一份关于玉米表型测量的说明文档，含 budget 与 report。", encoding="utf-8")
+    (sdir / "notes.txt").write_text("玉米 表型 数据 汇总 report budget", encoding="utf-8")
+    (sdir / "blob.bin").write_bytes(b"\0" * 4096)
+
+    status = call("GET", "/search/status")
+    check("检索状态可读，且当前构建支持 FTS5", status.get("enabled") is True, str(status)[:80])
+
+    idx_job = wait_job(call("POST", "/search/index", {"path": str(sdir)})["job_id"])
+    check("建索引任务完成", idx_job.get("status") == "done", idx_job.get("error") or "")
+    idx = idx_job.get("result") or {}
+    check("收录 3 个文件", idx.get("total_files") == 3, f"实际 {idx.get('total_files')}")
+    check("其中 2 个抽到了正文", idx.get("text_files") == 2, f"实际 {idx.get('text_files')}")
+
+    again = wait_job(call("POST", "/search/index", {"path": str(sdir)})["job_id"])
+    check("再建一次全部跳过（增量生效）", (again.get("result") or {}).get("skipped") == 3,
+          f"skipped={(again.get('result') or {}).get('skipped')}")
+
+    hit = call("GET", "/search?q=" + urllib.parse.quote("表型"))
+    check("中文 2 字词能命中", hit.get("total") == 2, f"实际 {hit.get('total')}")
+    check("命中结果字段齐全", bool((hit.get("results") or [{}])[0].get("path"))
+          and "\u0001" in ((hit.get("results") or [{}])[0].get("snippet") or ""))
+    check("英文词能命中", call("GET", "/search?q=report").get("total") == 2)
+    check("搜不到时如实返回 0 条", call("GET", "/search?q=zzzzzz").get("total") == 0)
+    check("状态里能看到这个目录",
+          any(r.get("path") == str(sdir) for r in call("GET", "/search/status").get("roots", [])))
+
+    removed = call("POST", "/search/remove", {"path": str(sdir)})
+    check("移除索引后归零", removed.get("removed") == 3
+          and call("GET", "/search?q=" + urllib.parse.quote("表型")).get("total") == 0,
+          f"removed={removed.get('removed')}")
+    shutil.rmtree(sdir, ignore_errors=True)
 
     # ---- 迁移 ----
     print("\n[跨盘迁移]")

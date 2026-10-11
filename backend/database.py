@@ -249,6 +249,19 @@ def search_forget_root(path: Path, root_id: str) -> int:
     return len(ids)
 
 
+def search_known(path: Path, file_path: str) -> bool:
+    """这个文件在不在索引里。
+
+    给「在资源管理器打开」做护栏 —— 那个接口会去碰系统 shell，
+    只允许定位**已经被索引过**的文件，不能被拿来探任意路径。
+    """
+    with _lock, connect(path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM search_file WHERE path=?", (file_path,)
+        ).fetchone()
+    return row is not None
+
+
 def search_query(path: Path, match: str, limit: int, root_id: str = "") -> list[dict]:
     """按 FTS5 MATCH 表达式检索。
 

@@ -275,3 +275,20 @@ for entry in iter_entries(root, progress=ctx.tick, cancelled=ctx.cancelled):
 - `Logs.vue` 的 `TYPE_LABELS` 漏了 `similar`，日志页会把「相似图片」显示成原始英文 `similar`；已补。
 - 索引跑完**自动刷新状态**（`watch(status === "done")`），不沿用扫描页那种"跑完给个按钮手动载入结果"的做法 ——
   索引结果不是一份"清单"，没有"要不要看"的选择。
+
+### 补欠账（同日 17:00）
+
+首轮交付时漏了三处，已补齐：
+
+1. **接进 `tests/smoke_test.py` 总闸**（§九 承诺过、首轮漏了）：新增「全文检索」段共 **11 项**，
+   走**真实 HTTP 接口**（`POST /api/search/index` → `GET /api/search` 中文/英文命中 → `POST /api/search/remove`）。
+   总闸从 73 → **84 项**。★ 检索用**另一个**样本目录，不去动 `build_fixture` —— 上面那些断言写死了文件数，加一个文件就全崩。
+2. **索引陈旧提示**（拍板点⑥）：`status()` 带上 `age_days` / `stale` / `any_stale`，前端在「已索引目录」上方给一条告警，
+   **只提示不自动重建**。阈值 `SEARCH_STALE_DAYS` 默认 7 天。
+3. **结果行「在资源管理器打开」**（P2）：新接口 `POST /api/search/reveal`，用 `explorer /select,`；
+   护栏 = **只放行已索引过的文件**（不给"探任意路径"留口子），失败给人话原因。
+
+复核：总闸 **84/84**；`vite build` 通过；实机复跑三页断言全过（陈旧告警文案、定位按钮数 = 命中数、接力出口、移除索引归零），无 JS 错误。
+
+> 命名与方案的两处小出入（功能等价）：方案写 `GET /api/search/roots` → 实际是 `GET /api/search/status`（返回值含 roots）；
+> 方案写 `DELETE /api/search/roots/{id}` → 实际是 `POST /api/search/remove`。

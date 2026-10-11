@@ -100,6 +100,7 @@ export const searchFiles = (keyword, limit = 0) =>
   unwrap(api.get('/search', { params: { q: keyword, limit } }))
 export const getSearchStatus = () => unwrap(api.get('/search/status'))
 export const removeSearchRoot = path => unwrap(api.post('/search/remove', { path }))
+export const revealFile = path => unwrap(api.post('/search/reveal', { path }))
 
 /* ---------------- 回收站 ---------------- */
 export const getTrash = () => unwrap(api.get('/trash'))

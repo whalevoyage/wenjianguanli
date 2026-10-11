@@ -572,6 +572,9 @@ SEARCH_MAX_FILE_BYTES = int(os.getenv("FILEPILOT_SEARCH_MAX_BYTES") or 2 * 1024 
 SEARCH_FILE_LIMIT = int(os.getenv("FILEPILOT_SEARCH_LIMIT") or 200000)
 # 单次检索最多返回多少条
 SEARCH_RESULT_LIMIT = int(os.getenv("FILEPILOT_SEARCH_RESULT_LIMIT") or 200)
+# 索引超过这么多天就提示"可能已过期"。**只提示，不自动重建** ——
+# 自用项目不该在用户没同意的情况下自己跑一个可能很久的任务。
+SEARCH_STALE_DAYS = int(os.getenv("FILEPILOT_SEARCH_STALE_DAYS") or 7)
 
 
 # ---------------------------------------------------------------------------

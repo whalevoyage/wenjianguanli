@@ -10,8 +10,9 @@
  * 2 字词根本命中不了（细节见 `docs/SEARCH_PLAN.md`）。
  */
 import { computed, onMounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { Files, FolderOpened, Search, Timer } from '@element-plus/icons-vue'
-import { getSearchStatus, removeSearchRoot, searchFiles, startSearchIndex } from '../api/filepilot'
+import { getSearchStatus, removeSearchRoot, revealFile, searchFiles, startSearchIndex } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
 import { useHandoffTarget } from '../composables/useHandoff'
@@ -85,6 +86,16 @@ const searchHint = computed(() => {
   return `命中 ${result.value.total} 个 · 耗时 ${result.value.took_ms} ms`
 })
 
+/* 索引过期：**只提示，不自动重建**（方案拍板点⑥）。
+   重建是个可能跑很久的任务 —— 自用工具不该在用户没点过的情况下自己发起。 */
+const staleNote = computed(() => {
+  const stale = (status.value.roots || []).filter(root => root.stale)
+  if (!stale.length) return ''
+  const oldest = Math.max(...stale.map(root => root.age_days || 0))
+  const days = status.value.stale_days ?? 7
+  return `索引是 ${oldest} 天前建的，可能已经过期（超过 ${days} 天）。需要的话点上面的「建立 / 更新索引」—— 不会自动重建。`
+})
+
 const rows = computed(() => (result.value?.results || []).map(item => ({
   ...item,
   nameParts: segments(item.name),
@@ -124,6 +135,15 @@ async function forgetRoot(rootPath) {
   await removeSearchRoot(rootPath)
   result.value = null
   await loadStatus()
+}
+
+/** 在资源管理器里选中这个文件。后端只放行**已索引过**的路径，失败会给原因。 */
+async function reveal(itemPath) {
+  try {
+    await revealFile(itemPath)
+  } catch (error) {
+    ElMessage.error(error.message || '打不开这个位置')
+  }
 }
 
 /* 索引任务跑完就刷新：根目录数与文件数变了，搜索按钮的可用状态也跟着变 */
@@ -197,6 +217,15 @@ onMounted(async () => {
         </div>
       </div>
 
+      <el-alert
+        v-if="staleNote"
+        class="panel-note"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="staleNote"
+      />
+
       <div class="root-list">
         <div v-for="root in status.roots" :key="root.id" class="root-item">
           <div class="root-item__main">
@@ -263,6 +292,9 @@ onMounted(async () => {
               <span class="hit__dir" :title="item.path"><el-icon><FolderOpened /></el-icon>{{ item.directory }}</span>
               <span>{{ item.modified_time }}</span>
               <span v-if="!item.is_text" class="hit__tag">只索引了文件名</span>
+              <el-button class="hit__reveal" text type="primary" @click="reveal(item.path)">
+                在资源管理器打开
+              </el-button>
             </div>
           </article>
         </div>

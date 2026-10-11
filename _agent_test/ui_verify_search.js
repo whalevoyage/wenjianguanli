@@ -50,6 +50,8 @@ const shot = async (page, name) => {
   await page.waitForTimeout(800)
   console.log('  已索引目录 =', (await page.locator('.root-item__meta').allInnerTexts()).join(' | '))
   console.log('  索引摘要 =', (await page.locator('.index-summary').innerText().catch(() => '（无）')).replace(/\n/g, ' '))
+  // 陈旧提示：本次跑时后端带着 FILEPILOT_SEARCH_STALE_DAYS=0，所以刚建的索引也算"过期"
+  console.log('  陈旧提示 =', (await page.getByText(/可能已经过期/).first().innerText().catch(() => '（无）')))
   await shot(page, 'b1-1-indexed')
 
   // ---- 2) 中文检索 ----
@@ -64,6 +66,7 @@ const shot = async (page, name) => {
   console.log('  命中片段 =', (await page.locator('.hit__snippet').first().innerText().catch(() => '（无）')))
   console.log('  高亮片段数（.is-hit）=', await page.locator('.is-hit').count())
   console.log('  副标题 =', await page.locator('.panel-subtitle').last().innerText().catch(() => '（无）'))
+  console.log('  「在资源管理器打开」按钮数 =', await page.locator('.hit__reveal').count())
   await page.locator('.hit').first().scrollIntoViewIfNeeded()
   await page.waitForTimeout(400)
   await shot(page, 'b1-2-hit')
