@@ -5,6 +5,9 @@ import { Coin, Files, FolderOpened, Grid, Lock, PieChart, Sort, Timer, Warning }
 import { exportVirtual, startMigrate, startVirtual } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
+import NextSteps from '../components/NextSteps.vue'
+import HandoffNote from '../components/HandoffNote.vue'
+import { useHandoffTarget } from '../composables/useHandoff'
 import DataTable from '../components/DataTable.vue'
 import EmptyState from '../components/EmptyState.vue'
 import JobProgress from '../components/JobProgress.vue'
@@ -18,6 +21,7 @@ import { formatCount, formatDuration } from '../utils/formatters'
  * 「复制 → 逐文件校验 → 校验通过才删源」的执行与回滚链路。
  */
 const { config, excludes, load: loadConfig } = useConfig()
+
 const preview = useJob('virtual.preview')
 const planJob = useJob('virtual.plan')
 const execJob = useJob('virtual.exec')
@@ -30,6 +34,16 @@ const openKeys = ref([])
 const target = ref('')
 const planResult = ref(null)
 const exporting = ref(false)
+
+/* 整理完/整理前都能从这一页去别处看看。
+   ★ 必须放在 `const path` **之后** —— 这里要把 path 这个 ref 传进去，
+     写在前面会撞上暂时性死区（`Cannot access 'path' before initialization`）。 */
+const { handed, from } = useHandoffTarget(path)
+const nextSteps = [
+  { name: 'space', label: '空间地图' },
+  { name: 'duplicates', label: '查重' },
+  { name: 'junk', label: '清理' },
+]
 
 const modeOptions = computed(() =>
   (config.value?.virtual_modes || []).map(mode => ({ label: mode.label, value: mode.id })),
@@ -130,6 +144,24 @@ const planSummary = computed(() => {
 })
 
 /** 预览清单 → migrate 的显式清单（源 → 目标根/分组路径/原名） */
+/**
+ * 这个页面有四步（预览 → 选目标 → 出计划 → 执行），后面几步都在页面下方。
+ * 只看到预览就以为"到头了"是这个页面最真实的误解 —— 所以顶部要有一条步骤指示。
+ */
+const stepLabels = ['预览', '出计划', '确认执行']
+const stepIndex = computed(() => {
+  if (execJob.job.value) return 3
+  if (planResult.value) return 2
+  return 1
+})
+
+/** 计划按钮为什么是灰的 —— 干灰着不说明原因，用户只会以为功能坏了。 */
+const planHint = computed(() => {
+  if (!result.value) return '先在上面生成一次预览。'
+  if (!target.value.trim()) return '先选一个「整理到」的目标根目录 —— 选好后这里会列出要移动的文件数。'
+  return `清单里有 ${planItems.value.length} 个文件，点右边按钮生成可执行计划。`
+})
+
 const planItems = computed(() => {
   const data = result.value
   const base = target.value.trim().replace(/[\\/]+$/, '')
@@ -271,6 +303,21 @@ onMounted(async () => {
   <div class="section-stack form-page">
 
     <section class="app-card panel-card">
+      <!-- 步骤指示：四步里有三步在下方，不先说明白就会被当成"预览完就结束了" -->
+      <ol class="steps">
+        <li
+          v-for="(label, index) in stepLabels"
+          :key="label"
+          class="steps__item"
+          :class="{ 'is-current': stepIndex === index + 1, 'is-done': stepIndex > index + 1 }"
+        >
+          <span class="steps__dot">{{ stepIndex > index + 1 ? '✓' : index + 1 }}</span>
+          <span class="steps__label">{{ label }}</span>
+        </li>
+      </ol>
+
+      <HandoffNote v-if="handed" :path="handed" :from="from" @dismiss="handed = ''" />
+
       <TargetPicker
         v-model:path="path"
         v-model:excludes="excludes"
@@ -389,6 +436,14 @@ onMounted(async () => {
           <div class="meta-pill">会真实移动文件</div>
         </div>
 
+        <!-- 和迁移页同一句话：先说清"这一步不动文件"，用户才敢往下点 -->
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="这一步只生成计划，不会动任何文件。确认清单之后再执行。"
+        />
+
         <TargetPicker
           v-model:path="target"
           :drives="config?.drives || []"
@@ -398,9 +453,7 @@ onMounted(async () => {
         />
 
         <div class="row-actions">
-          <span class="tree-hint">
-            清单包含预览中列出的 {{ formatCount(planItems.length) }} 个文件。
-          </span>
+          <span class="tree-hint">{{ planHint }}</span>
           <el-button
             size="large"
             :icon="Sort"
@@ -453,10 +506,68 @@ onMounted(async () => {
 
       />
     </section>
+
+    <!-- 走完整条整理链之后，给个"接下来去哪" —— 不然这一页就是路的尽头 -->
+    <NextSteps v-if="result" :path="path" origin="virtual" :steps="nextSteps" />
   </div>
 </template>
 
 <style scoped>
+
+/* 步骤指示：细、不抢主色，只在"当前步"上着色。
+   这个页面有四步而且后三步都在下方，没有这条指示就很容易以为"预览完就结束了"。 */
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.steps__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-3);
+  font-size: var(--fs-note);
+}
+
+.steps__item + .steps__item::before {
+  content: '';
+  width: 22px;
+  height: 1px;
+  margin-right: 6px;
+  background: var(--hairline);
+}
+
+.steps__dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0.5px solid var(--hairline);
+  border-radius: 50%;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.steps__item.is-current {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.steps__item.is-current .steps__dot {
+  border-color: var(--primary);
+  background: var(--primary);
+  /* 主色底上的前景色只能用 token，不准写字面量 #fff */
+  color: var(--on-primary);
+}
+
+.steps__item.is-done {
+  color: var(--ink-2);
+}
 .title-actions {
   display: flex;
   align-items: center;

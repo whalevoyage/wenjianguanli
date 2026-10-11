@@ -62,7 +62,14 @@ def main() -> int:
     body = call("/settings/safety")[1]
     check("可归位到标准档", body.get("mode") == "standard", str(body.get("mode")))
     check("档位表包含三档", len(body.get("modes") or []) == 3)
-    check("底线声明存在", len(body.get("guards") or []) == 2)
+    # 底线声明：**断言"这三条底线都在"，而不是数条数**。
+    # 写死 `== 2` 的后果已经发生过一次：代码补了「只读档一律拒绝」这第三条，
+    # 测试却一直红着 —— 而这种红是"测试过时"，不是"代码坏了"，看久了就没人看了。
+    guards = " ".join(body.get("guards") or [])
+    check("底线声明存在", len(body.get("guards") or []) >= 3, str(len(body.get("guards") or [])))
+    check("底线含：删除先进隔离区", "隔离区" in guards and "永不直接删" in guards)
+    check("底线含：自保护不可写", "任何档位都不可写" in guards)
+    check("底线含：只读档一律拒绝", "只读" in guards and "一律拒绝" in guards)
     tones = {m["id"]: m.get("tone") for m in body.get("modes") or []}
     check("三档配色互不相同（胶囊能看出差别）", len(set(tones.values())) == 3, str(tones))
 

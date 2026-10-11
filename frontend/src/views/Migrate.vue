@@ -5,6 +5,7 @@ import { Coin, Files, Lock, PieChart, Sort, Warning } from '@element-plus/icons-
 import { startMigrate } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
+import NextSteps from '../components/NextSteps.vue'
 import { useHandoffTarget } from '../composables/useHandoff'
 import HandoffNote from '../components/HandoffNote.vue'
 import DataTable from '../components/DataTable.vue'
@@ -18,6 +19,11 @@ const plan = useJob('migrate.plan')
 const execute = useJob('migrate.execute')
 
 const source = ref('')
+/* 搬完之后的去处：这一页也是"清单型"页面，不该是路的尽头 */
+const nextSteps = [
+  { name: 'space', label: '空间地图' },
+  { name: 'duplicates', label: '查重' },
+]
 /* 跨页接力：从别的页面带着目录过来时，直接填好这个框（不自动开跑） */
 const { handed, from } = useHandoffTarget(source)
 const target = ref('')
@@ -206,6 +212,8 @@ onMounted(async () => {
         />
       </section>
     </template>
+
+    <NextSteps v-if="source" :path="source" origin="migrate" :steps="nextSteps" />
 
     <section v-if="execute.job.value" class="app-card panel-card">
       <div class="panel-title-row">

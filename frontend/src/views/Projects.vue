@@ -7,6 +7,7 @@ import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
 import { useHandoffTarget } from '../composables/useHandoff'
 import HandoffNote from '../components/HandoffNote.vue'
+import NextSteps from '../components/NextSteps.vue'
 import DataTable from '../components/DataTable.vue'
 import EmptyState from '../components/EmptyState.vue'
 import JobProgress from '../components/JobProgress.vue'
@@ -27,6 +28,18 @@ const scan = useJob('projects')
 const path = ref('')
 /* 跨页接力：从别的页面带着目录过来时，直接填好这个框（不自动开跑） */
 const { handed, from } = useHandoffTarget(path)
+
+/**
+ * 结果之后能干什么。
+ *
+ * 这一页原来扫出僵尸项目就**没有出口**了 —— 只能自己去迁移页重选一次目录。
+ * 「看」和「动」之间必须有一步衔接，否则这个功能止步于"知道了"。
+ */
+const nextSteps = [
+  { name: 'migrate', label: '迁到别的盘' },
+  { name: 'junk', label: '清理构建产物' },
+  { name: 'space', label: '空间地图' },
+]
 const zombieDays = ref(180)
 const maxDepth = ref(0)
 const onlyZombie = ref(false)
@@ -213,6 +226,8 @@ onMounted(async () => {
       <section class="stats-grid">
         <StatCard v-for="item in summary" :key="item.title" v-bind="item" />
       </section>
+
+      <NextSteps :path="path" origin="projects" :steps="nextSteps" />
 
       <section class="app-card panel-card">
         <div class="panel-title-row">

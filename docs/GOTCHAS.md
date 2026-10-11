@@ -904,3 +904,30 @@ def sub(path, old, new, why):
 
 排查手段：改完立刻数一遍关键标识的出现次数（`grep -c`），
 **期望值要提前写出来**（import + 调用 = 2，声明 = 1）。这次就是靠"卡片渲染两遍"的截图才发现的。
+
+---
+
+## 十七、在 `<script setup>` 里插代码：先确认被引用的 ref 已经声明（暂时性死区）
+
+**症状**：**整页白屏**，主内容区一个元素都没有；控制台只有一句
+`ReferenceError: Cannot access 'z' before initialization`（打包压缩后变量名变成一个字母，根本看不出是哪个）。
+
+**原因**：`useHandoffTarget(path)` 这类调用**在 setup 执行期间就会读 `path`**。
+如果 `const path = ref('')` 写在它后面 —— 撞上 JavaScript 的暂时性死区。
+
+**为什么特别难查**：
+- 编译不报（`vite build` 退出码 0）
+- 模板里也看不出来（报错在 script 的求值顺序，不在模板）
+- 页面上什么都不显示，只有控制台一句没有上下文的 `Cannot access 'z'`
+
+**可复用的检查**（这次靠它一次扫出全部 6 个页面）：
+
+```python
+import re
+m = re.search(r"useHandoffTarget\((\w+)\)", text)
+decl = re.search(rf"const {m.group(1)} = ref\(", text)
+assert text[:decl.start()].count("\n") < text[:m.start()].count("\n"), "顺序反了会撞死区"
+```
+
+**规矩**：用脚本往 `<script setup>` 里插代码时，**先把被引用变量的声明行号打出来**，
+确认插入点在它之后 —— 别凭"看起来在前面"判断。
