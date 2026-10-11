@@ -117,7 +117,9 @@ function addExclude() {
 
 .target-picker__row {
   display: grid;
-  grid-template-columns: 68px minmax(0, 1fr);
+  /* 标签列给到 88px：68px 时「要扫描的目录」会被挤成两行，
+     行高也随之不整齐。控件列继续吃掉剩下的宽度。 */
+  grid-template-columns: 88px minmax(0, 1fr);
   align-items: center;
   gap: 12px;
 }

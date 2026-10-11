@@ -32,6 +32,8 @@
   --primary-ink: #0b57a4;
   /* 落在主色实底/渐变底上的前景色，恒为白 */
   --on-primary: #ffffff;
+  /* 进度条上的流动高光（叠在主色填充上表示「还在动」） */
+  --bar-sheen: rgb(255 255 255 / 38%);
 
   /* 语义色 —— Apple 系统色（各配 soft 浅底 / ink 深字） */
   --success: #34c759;
@@ -68,6 +70,27 @@
   --chart-from: #35a1ff;
   --chart-to: #0071e3;
   --chart-glow: rgba(0, 113, 227, 0.32);
+
+  /* 分级色阶：给「按份额排序」的可视化用（空间地图的方块 / 构成条 / 排行条）。
+     l1 = 最大最实，l6 = 最小最淡；--chart-onN 是落在第 N 档上的前景色。
+     ★ 数据可视化例外（2026-10-10 用户明确授权）：**只有图表画布内**可以破例用
+     渐变 / 阴影 / 发光；卡片、按钮、文字一律照旧。颜色仍然只写在这里。 */
+  --chart-l1: #0b4f8f;
+  --chart-l2: #1465ad;
+  --chart-l3: #2a83c9;
+  --chart-l4: #5aa4dd;
+  --chart-l5: #9cc6ec;
+  --chart-l6: #cfe3f7;
+  --chart-on1: #ffffff;
+  --chart-on2: #ffffff;
+  --chart-on3: #ffffff;
+  --chart-on4: #042c53;
+  --chart-on5: #042c53;
+  --chart-on6: #042c53;
+  --chart-track: #e8f1fd;
+  --chart-glow-strong: rgba(0, 113, 227, 0.42);
+  --chart-sheen: rgb(255 255 255 / 30%);
+  --chart-shadow: 0 4px 14px rgba(0, 84, 168, 0.18);
 
   /* 面板一律不透明：参考图的效果是「灰底上的纯白卡」，
      不需要半透明，也就不需要 backdrop-filter（省掉一层 GPU 开销） */
@@ -152,14 +175,31 @@
   --dur: var(--duration-fast);
   --dur-slow: var(--duration-slow);
 
-  /* 字号阶 */
+  /* 字号阶
+     五档各司其职，层级靠字号差拉开、不靠颜色：
+       页面标题 15 / 卡片标题 13 / 消息正文 13.5 / 次级说明 12 / 元信息 11.5 */
   --fs-display: 34px;
   --fs-h1: 29px;
   --fs-h2: 20px;
   --fs-title: 15px;
   --fs-body: 13.5px;
+  --fs-card-title: 13px;
   --fs-note: 12px;
+  --fs-meta: 11.5px;
   --fs-micro: 11px;
+
+  /* 间距刻度 —— 所有 padding / gap / margin 只从这六个数里取。
+     散落的 5px / 7px / 13px 会让整页的节奏变脏，而节奏脏正是「不够精致」的主因。 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* 阅读栏宽度 —— 长文本横跨整个宽屏会让人读不下去，
+     限宽居中是企业级文档感的核心手法（窄于 1100px 时不生效）。 */
+  --reading-width: 760px;
 
   /* 字体栈 */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
@@ -242,7 +282,11 @@
 }
 
 /* ---------------------------------------------------------------- 深色主题 */
-[data-theme="dark"] {
+/* 深色令牌。
+   选择器用 `:root[data-theme="dark"]`（优先级 0,2,0）而不是 `[data-theme="dark"]`（0,1,0）：
+   Element Plus 的深色变量挂在下 `html.dark`（0,1,1）上，低一层的写法会被它整套压掉。
+   详见下面 EP 调色板映射处的注释。 */
+:root[data-theme="dark"] {
   color-scheme: dark;
 
   --ink: #f5f5f7;
@@ -288,11 +332,30 @@
   --brand-navy: #6bb4ff;
   --grad-brand: linear-gradient(145deg, #4da3f5, #0a84ff);
   --grad-bar: linear-gradient(180deg, #4da3f5, #0a84ff);
+  /* 深色下填充更亮，高光要收一点，否则糊成一片 */
+  --bar-sheen: rgb(255 255 255 / 26%);
 
   /* 图表渐变：深色下亮端要更亮，暗端跟着深色主色走 */
   --chart-from: #66b8ff;
   --chart-to: #0a84ff;
   --chart-glow: rgba(10, 132, 255, 0.42);
+
+  --chart-l1: #4da3f5;
+  --chart-l2: #3b8fe0;
+  --chart-l3: #2f79c2;
+  --chart-l4: #26639f;
+  --chart-l5: #1e4e7d;
+  --chart-l6: #1a3d61;
+  --chart-on1: #042c53;
+  --chart-on2: #042c53;
+  --chart-on3: #ffffff;
+  --chart-on4: #ffffff;
+  --chart-on5: #d6e8ff;
+  --chart-on6: #d6e8ff;
+  --chart-track: rgb(255 255 255 / 9%);
+  --chart-glow-strong: rgba(10, 132, 255, 0.5);
+  --chart-sheen: rgb(255 255 255 / 18%);
+  --chart-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
 
   /* 不透明面板，与浅色一致 */
   --glass: #2c2c2e;
@@ -322,12 +385,31 @@
   --sh-3: 0 24px 60px rgba(0, 0, 0, 0.62);
   --sh-focus: 0 0 0 3.5px rgba(10, 132, 255, 0.3);
 
+  /* Element Plus 调色板映射（深色）——**必须重述一遍，不能只靠上面的 :root 那份**。
+     Element Plus 的深色变量文件（theme-chalk/dark/css-vars.css）把整套调色板声明在
+     `html.dark`（优先级 0,1,1）下，而我们原来的选择器是 `[data-theme="dark"]`（0,1,0）——
+     低一层，**全被压掉**。后果是深色模式下所有 EP 控件（按钮 / 开关 / 分段 / 标签 /
+     提示条 / 分页）显示的都是 EP 默认蓝 #409eff、默认绿 #67c23a、默认橙 #e6a23c，
+     和品牌色完全不是一回事。
+     现在选择器改成 `:root[data-theme="dark"]`（0,2,0）严格压过 `html.dark`，
+     并把映射逐条补齐。 */
+  --el-color-primary: var(--primary);
   --el-color-primary-light-3: #3d9dff;
   --el-color-primary-light-5: #6bb4ff;
   --el-color-primary-light-7: #9acbff;
   --el-color-primary-light-8: #b4d7ff;
   --el-color-primary-light-9: var(--primary-soft);
   --el-color-primary-dark-2: #0060c9;
+
+  --el-color-success: var(--success);
+  --el-color-success-light-9: var(--success-soft);
+  --el-color-warning: var(--warning);
+  --el-color-warning-light-9: var(--warning-soft);
+  --el-color-danger: var(--danger);
+  --el-color-danger-light-9: var(--danger-soft);
+  --el-color-error: var(--danger);
+  --el-color-info: var(--ink-3);
+  --el-color-info-light-9: var(--surface-2);
 
   --el-bg-color: var(--surface);
   --el-bg-color-page: var(--bg);
@@ -591,7 +673,9 @@ textarea {
 
 .form-page {
   width: 100%;
-  max-width: 1120px;
+  /* 不再另设上限：宽度统一由 --content-width 收口（App.vue 里的 workspace-content）。
+     之前这里卡 1120，而 1920 窗口下内容区实际可用 1396 —— 表单左右各空出一大片，
+     控件像是缩在中间一小块里。现在只留一道上限：宽屏铺满，超宽屏仍由 --content-width 兜住。 */
   margin: 0 auto;
 }
 
@@ -694,6 +778,7 @@ textarea {
 .option-block {
   display: grid;
   gap: 8px;
+  /* 变宽由上面 `.form-page .option-block` 那条统一负责（flex: 1 1 0），此处不重复声明。 */
 }
 
 /* 状态圆点：原 Home / Logs / Duplicates / JobProgress 四份私实现，取并集。
@@ -1324,8 +1409,19 @@ input:-webkit-autofill:active {
   --el-skeleton-to-color: var(--inset);
 }
 
+/* 加载遮罩：这里必须 !important。
+   Element Plus 会把 --el-mask-color（浅色下是近白 rgba(251,251,253,.72)）直接写成
+   **内联样式**，所以原来写的 `background-color: var(--glass)`（纯白）一直是条死规则。
+
+   为什么不能用白：切选项卡时新页面会挂上这层遮罩约 0.4 秒，白/近白会把
+   「还没填上内容的空白区」和「已经渲染出来但被罩住的卡片」一起洗成一片白，
+   观感就是白屏闪一下（实测遮罩在场 21~443ms）。
+
+   改成一成灰（--inset）：方向朝「压暗」而不是「提亮」，不再泛白；
+   同时保留遮罩该有的两件事 —— 盖住误点、留住中间那个转圈。
+   注意别去改 --el-mask-color 本身：它同时管着 .el-overlay（弹窗遮罩），改它会波及弹窗。 */
 .el-loading-mask {
-  background-color: var(--glass);
+  background-color: var(--inset) !important;
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
 }

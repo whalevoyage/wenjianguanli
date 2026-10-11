@@ -1,12 +1,15 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Coin, CopyDocument, Delete, DocumentCopy, Files } from '@element-plus/icons-vue'
+import { Coin, CopyDocument, Delete, DocumentCopy, Files, Picture } from '@element-plus/icons-vue'
 import EmptyState from '../components/EmptyState.vue'
 import StatCard from '../components/StatCard.vue'
-import { startClean, startDuplicateScan } from '../api/filepilot'
+import { startClean, startDuplicateScan, startSimilarScan } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
+import { useHandoffTarget } from '../composables/useHandoff'
+import HandoffNote from '../components/HandoffNote.vue'
+import NextSteps from '../components/NextSteps.vue'
 import JobProgress from '../components/JobProgress.vue'
 import TargetPicker from '../components/TargetPicker.vue'
 import { formatBytes, formatCount } from '../utils/formatters'
@@ -14,11 +17,21 @@ import { formatBytes, formatCount } from '../utils/formatters'
 const { config, excludes, load: loadConfig } = useConfig()
 const scan = useJob('duplicates.scan')
 const clean = useJob('duplicates.clean')
+const simRun = useJob('duplicates.similar')
 
 const path = ref('')
+/* 跨页接力：从别的页面带着目录过来时，直接填好这个框（不自动开跑） */
+const { handed, from } = useHandoffTarget(path)
+
+/** 反向接力：用同一个目录去别的能力，不用再选一次 */
+const nextSteps = [{ name: 'space', label: '空间地图' }, { name: 'migrate', label: '迁移到别处' }]
 const result = ref(null)
+/* 相似图片的结果单独放 —— 相似 ≠ 相同，界面上必须分开呈现，绝不混进「完全重复」 */
+const similar = ref(null)
 const activeGroups = ref([])
 const selected = ref(new Set())
+/* 相似阈值：越小越严格。6 是默认，调到 10 会宽松很多（误报也变多） */
+const similarThreshold = ref(6)
 
 const metrics = computed(() => {
   if (!result.value) return []
@@ -106,6 +119,22 @@ async function start() {
   await scan.run(() => startDuplicateScan({ path: path.value.trim(), excludes: excludes.value }))
 }
 
+/**
+ * 找「画面相似」的图片（缩过、压过的那些）。
+ *
+ * 和上面的「开始查重」是两条独立的流程：那个比的是字节完全一样，这个比的是画面像不像。
+ * 结果**分开放**，因为相似不等于相同 —— 删哪张得自己看图。
+ */
+async function startSimilar() {
+  if (!path.value.trim()) return
+  similar.value = null
+  await simRun.run(() => startSimilarScan({
+    path: path.value.trim(),
+    excludes: excludes.value,
+    threshold: similarThreshold.value,
+  }))
+}
+
 async function cleanup() {
   if (!selected.value.size) return
   const items = []
@@ -130,6 +159,10 @@ watch(() => scan.job.value?.status, (status) => {
   }
 })
 
+watch(() => simRun.job.value?.status, (status) => {
+  if (status === 'done' && simRun.job.value?.result) similar.value = simRun.job.value.result
+})
+
 watch(() => clean.job.value?.status, (status) => {
   if (status === 'done') start()
 })
@@ -143,6 +176,8 @@ onMounted(async () => {
   <div class="section-stack form-page">
 
     <section class="app-card panel-card">
+      <HandoffNote v-if="handed" :path="handed" :from="from" @dismiss="handed = ''" />
+
       <TargetPicker
         v-model:path="path"
         v-model:excludes="excludes"
@@ -155,15 +190,31 @@ onMounted(async () => {
         <el-button type="primary" size="large" :loading="scan.running.value" :icon="CopyDocument" @click="start">
           {{ scan.running.value ? '正在查重' : '开始查重' }}
         </el-button>
+        <!-- 第二条流水线：字节完全一样 vs 画面像不像，两件事 -->
+        <el-button size="large" :loading="simRun.running.value" :icon="Picture" @click="startSimilar">
+          {{ simRun.running.value ? '正在比对画面' : '找出相似图片' }}
+        </el-button>
+        <el-select v-model="similarThreshold" size="large" class="similar-threshold" title="相似阈值：越小越严格，默认 6">
+          <el-option v-for="n in [4, 6, 8, 10, 12]" :key="n" :label="`相似阈值 ${n}`" :value="n" />
+        </el-select>
       </div>
 
       <JobProgress v-if="scan.job.value" :job="scan.job.value" empty-title="先跑一次查重" @cancel="scan.cancel" />
+      <JobProgress
+        v-if="simRun.job.value"
+        :job="simRun.job.value"
+        empty-title="点「找出相似图片」开始比对"
+        :rollbackable="false"
+        @cancel="simRun.cancel"
+      />
     </section>
 
     <template v-if="result">
       <section class="stats-grid">
         <StatCard v-for="item in metrics" :key="item.title" v-bind="item" />
       </section>
+
+      <NextSteps :path="path" origin="duplicates" :steps="nextSteps" />
 
       <el-alert
         type="success"
@@ -246,6 +297,60 @@ onMounted(async () => {
 
       <JobProgress v-if="clean.job.value" :job="clean.job.value" @cancel="clean.cancel" @rollback="clean.rollback" />
     </template>
+
+    <!-- 相似图片：**独立成块**，不并进上面的「完全重复」。
+         相似 ≠ 相同，删哪张得自己看图，所以这里只列出来、不给一键清理。 -->
+    <section v-if="similar" class="app-card panel-card">
+      <div class="panel-title-row">
+        <div>
+          <h3 class="panel-title">相似图片</h3>
+          <p class="panel-subtitle">
+            按画面相似度分组（缩过、压过、另存过的那些）；相似不等于相同，删哪张请自己看图确认
+          </p>
+        </div>
+        <span class="muted">
+          {{ formatCount(similar.scanned) }} 张参与比对<template v-if="similar.group_count"> · {{ similar.group_count }} 组 · 可省 {{ similar.redundant_text }}</template>
+        </span>
+      </div>
+
+      <el-alert
+        v-if="similar.available === false"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="similar.reason"
+      />
+
+      <el-alert
+        v-else-if="!similar.groups?.length"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="similar.note || '没有找到相似的图片'"
+      />
+
+      <div v-else class="similar-list">
+        <div v-for="(group, index) in similar.groups" :key="index" class="similar-group">
+          <div class="similar-group__head">
+            <strong>第 {{ index + 1 }} 组</strong>
+            <span class="muted">{{ group.count }} 张 · 可省 {{ group.redundant_text }}</span>
+          </div>
+          <div
+            v-for="file in group.files"
+            :key="file.path"
+            class="similar-file"
+            :class="{ 'is-keep': group.keep === file.path }"
+          >
+            <span class="similar-file__name">{{ file.name }}</span>
+            <small class="path-text" :title="file.path">{{ file.path }}</small>
+            <span class="similar-file__meta">{{ file.size_text }} · {{ file.mtime }}</span>
+            <el-tag v-if="group.keep === file.path" size="small" type="success" effect="plain">建议保留</el-tag>
+            <span v-else class="similar-file__mark">候选可删</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </div>
 </template>
 
@@ -354,6 +459,114 @@ onMounted(async () => {
 .file-row__copy small {
   display: block;
   margin-top: 4px;
+}
+
+/* 相似图片列表：整体比「完全重复」那块更克制 —— 它只是候选，不是结论 */
+.similar-threshold {
+  width: 132px;
+}
+
+.similar-list {
+  display: grid;
+  gap: 16px;
+}
+
+.similar-group {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.similar-group__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--fs-body);
+}
+
+.similar-file {
+  display: grid;
+  grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: var(--fs-note);
+}
+
+.similar-file.is-keep {
+  background: var(--inset);
+}
+
+.similar-file__name {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.similar-file__meta,
+.similar-file__mark {
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 相似图片列表：整体比「完全重复」那块更克制 —— 它只是候选，不是结论 */
+.similar-threshold {
+  width: 132px;
+}
+
+.similar-list {
+  display: grid;
+  gap: 16px;
+}
+
+.similar-group {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.similar-group__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--fs-body);
+}
+
+.similar-file {
+  display: grid;
+  grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: var(--fs-note);
+}
+
+.similar-file.is-keep {
+  background: var(--inset);
+}
+
+.similar-file__name {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.similar-file__meta,
+.similar-file__mark {
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .sticky-bar {

@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
+import re
 import string
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 APP_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
@@ -77,13 +80,45 @@ FILE_CATEGORIES: dict[str, set[str]] = {
 }
 CATEGORY_ORDER = list(FILE_CATEGORIES.keys()) + ["其他"]
 
+# 扩展名 → 分类 的反向表，导入时建一次。
+# 先出现的分类赢 —— 与原来"按 FILE_CATEGORIES 顺序找第一个命中"完全一致。
+_EXT_CATEGORY: dict[str, str] = {}
+for _cat, _exts in FILE_CATEGORIES.items():
+    for _ext in _exts:
+        _EXT_CATEGORY.setdefault(_ext, _cat)
+
 
 def category_for(path: Path | str) -> str:
-    ext = Path(path).suffix.lower()
-    for name, extensions in FILE_CATEGORIES.items():
-        if ext in extensions:
-            return name
-    return "其他"
+    """按扩展名归类。
+
+    原来每次 `Path(path).suffix` —— pathlib 造对象 + `_parse_path` 逐文件都不便宜
+    （实测 scan 里占 20%）。改成 `os.path.splitext` + 一次字典查找。
+    语义与原实现一致：目录名里的点不算（splitext 只看最后一个分隔符之后）、
+    `.gitignore` 这类前导点文件仍然没有扩展名。
+    """
+    ext = os.path.splitext(path if isinstance(path, str) else str(path))[1].lower()
+    return _EXT_CATEGORY.get(ext) or "其他"
+
+
+# ---------------------------------------------------------------------------
+# glob 匹配：**预编译成一条正则**，别再逐次 fnmatch
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=256)
+def glob_matcher(patterns: tuple[str, ...]) -> re.Pattern | None:
+    """把一组 glob 预编译成一条正则，用 `.match(name)` 匹配**已 lower** 的名字。
+
+    等价于 `any(fnmatch.fnmatchcase(name, p) for p in patterns)`（名字与模式都先 lower），
+    但只编译一次。
+
+    **为什么要换掉 `fnmatch.fnmatch`**：它对**名字和模式各调一次** `os.path.normcase`，
+    在 Windows 上那是 `LCMapStringEx` 系统调用。逐文件 × 逐模式地调用时纯是开销 ——
+    实测占垃圾扫描一半时间、虚拟整理三成。规则表在导入时编译，之后每个文件只花一次正则。
+    """
+    pats = tuple(p.lower() for p in patterns if p)
+    if not pats:
+        return None
+    return re.compile("|".join(f"(?:{fnmatch.translate(p)})" for p in pats))
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +175,10 @@ SELF_PROTECTED_DIRS: list[Path] = [
     TRASH_DIR,
 ]
 
-# 读取时剪枝用的完整黑名单（软 + 自），行为与档位无关
+# 软保护 + 自保护的合集。
+# **只用于「写」语义**（风险评级：目标落在这里就该抬高风险等级）。
+# 读取遍历不要用它 —— 软保护（桌面）只限制写，读必须放行，
+# 否则「扫描 C 盘」会静默漏掉桌面。读剪枝请用 fsutil.is_self_protected()。
 SAFETY_BLOCKLIST: list[Path] = SOFT_PROTECTED_DIRS + SELF_PROTECTED_DIRS
 
 # 权限档位：readonly / standard / full
@@ -280,6 +318,170 @@ HUGE_FILE_BYTES = 1024 ** 3
 
 
 # ---------------------------------------------------------------------------
+# 规则库的「用户覆盖」
+# ---------------------------------------------------------------------------
+#
+# ★ 用户不需要为了加一条规则去改代码。
+#   把 `junk_rules.json` 放到数据目录（STATE_DIR）里就能**覆盖同 id 的规则**或**追加新规则**：
+#
+#       [
+#         {"id": "log", "name": "日志文件", "level": "confirm",
+#          "desc": "改成默认不勾选了", "patterns": ["*.log"], "reason": "我常用日志排查问题"},
+#         {"id": "my_cache", "name": "我的缓存目录", "level": "safe",
+#          "desc": "XX 软件重建得出来的缓存", "patterns": ["*\\XXCache\\*"]}
+#       ]
+#
+# 三条设计约束：
+#   1. **内置默认永远在**：文件不存在 / 读不动 / 整份 JSON 坏了 → 用内置表照常跑。
+#   2. **逐条校验**：坏的那条跳过并记进 `JUNK_RULE_ISSUES`，**一条坏规则不能把整个扫描拖垮**。
+#   3. **只做覆盖与追加，不做删除**：想停用某条内置规则用 `"disabled": true`，而不是靠删不掉它。
+#      （这条是跟 MangoDisk 学的：规则可以改，但不给自己留"悄悄少了一条安全规则"的口子。）
+
+JUNK_RULES_FILE = STATE_DIR / "junk_rules.json"
+
+# 校验不过的规则（给诊断页和用户看的），形如 ["第 2 条 my_cache：level 只能是 safe/confirm/caution"]
+JUNK_RULE_ISSUES: list[str] = []
+
+_REQUIRED_RULE_FIELDS = ("id", "name", "level", "desc", "patterns")
+_VALID_LEVELS = {"safe", "confirm", "caution"}
+
+
+def validate_junk_rule(rule: object, index: int) -> str | None:
+    """校验一条规则。通过返回 None，否则返回**人话写的原因**（要能直接显示给用户）。"""
+    if not isinstance(rule, dict):
+        return f"第 {index} 条：不是对象"
+    rule_id = rule.get("id")
+    label = rule_id if isinstance(rule_id, str) and rule_id else f"第 {index} 条"
+
+    # 只想停用某条内置规则时，写 {"id": "...", "disabled": true} 就够了 ——
+    # 逼用户把整条规则抄一遍是没道理的（而且抄错一个字段整条就失效）。
+    if rule.get("disabled") is True and set(rule) <= {"id", "disabled"}:
+        if not isinstance(rule_id, str) or not rule_id.strip():
+            return f"第 {index} 条：只写 disabled 时必须给 id"
+        return None
+
+    for field in _REQUIRED_RULE_FIELDS:
+        if field not in rule:
+            return f"{label}：缺少字段 {field}"
+    for field in ("id", "name", "desc"):
+        if not isinstance(rule[field], str) or not rule[field].strip():
+            return f"{label}：{field} 必须是非空字符串"
+    if rule["level"] not in _VALID_LEVELS:
+        return f"{label}：level 只能是 {'/'.join(sorted(_VALID_LEVELS))}，收到 {rule['level']!r}"
+    patterns = rule["patterns"]
+    if not isinstance(patterns, list) or any(not isinstance(item, str) for item in patterns):
+        return f"{label}：patterns 必须是字符串数组"
+    if rule.get("disabled") is not None and not isinstance(rule["disabled"], bool):
+        return f"{label}：disabled 只能是 true/false"
+    return None
+
+
+def _load_user_junk_rules() -> list[dict]:
+    """读数据目录里的用户规则。任何一步出错都退回空列表（用内置表跑）。"""
+    try:
+        raw = JUNK_RULES_FILE.read_text(encoding="utf-8")
+    except (OSError, FileNotFoundError):
+        return []
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        JUNK_RULE_ISSUES.append(f"junk_rules.json 不是合法 JSON：{exc}")
+        return []
+    if not isinstance(data, list):
+        JUNK_RULE_ISSUES.append("junk_rules.json 的顶层必须是数组")
+        return []
+
+    valid: list[dict] = []
+    for index, rule in enumerate(data, 1):
+        problem = validate_junk_rule(rule, index)
+        if problem:
+            JUNK_RULE_ISSUES.append(problem)
+            continue
+        valid.append(rule)
+    return valid
+
+
+def merge_junk_rules(builtin: list[dict], user: list[dict]) -> list[dict]:
+    """同 id 覆盖（保序），新 id 追加；`disabled: true` 的从结果里去掉。"""
+    merged: list[dict] = []
+    by_id: dict[str, int] = {}
+    for rule in builtin:
+        by_id[rule["id"]] = len(merged)
+        merged.append(dict(rule))
+    for rule in user:
+        slot = by_id.get(rule["id"])
+        if slot is None:
+            by_id[rule["id"]] = len(merged)
+            merged.append(dict(rule))
+        else:
+            merged[slot] = {**merged[slot], **rule}
+    return [rule for rule in merged if not rule.get("disabled")]
+
+
+def reload_junk_rules() -> list[str]:
+    """重新读一次用户规则并重建 JUNK_RULES。返回这次遇到的问题（空表示全好）。
+
+    改完 `junk_rules.json` 想立刻生效时调用；正常情况下模块导入时已经加载过一次。
+    """
+    global JUNK_RULES
+    JUNK_RULE_ISSUES.clear()
+    JUNK_RULES = merge_junk_rules(JUNK_RULES_BUILTIN, _load_user_junk_rules())
+    return list(JUNK_RULE_ISSUES)
+
+
+# 内置表的原名保留一份 —— 用户规则是「覆盖」它，不是替代它
+JUNK_RULES_BUILTIN = JUNK_RULES
+JUNK_RULES = merge_junk_rules(JUNK_RULES_BUILTIN, _load_user_junk_rules())
+
+
+# 查重：「读文件头」与「算完整哈希」合并成一次打开的文件大小上限。
+#
+# 一次 open 在 Windows 上约 0.22ms，而多读 16KB 只约 0.016ms —— 所以对这么小的文件，
+# 与其「开一次读 4KB 算头哈希、需要时再开一次读全量」，不如**一次读完、两个哈希一起算**。
+# 盈亏平衡点：只要 7% 的候选真的会进入完整哈希阶段就稳赚；最坏情况（全部被头哈希剪掉）
+# 每个文件也只多读 16KB，**损失有界且很小**。
+# 阈值不能开大：实测 1MB 时有利场景反而掉到 1.34×、2MB 掉到 0.88×（读全量的代价反超）。
+DUP_SMALL_FILE_BYTES = 16 * 1024
+
+
+# 这些格式本身已是压缩编码，再 deflate 一次几乎不省体积、却慢好几倍：
+# 实测 72MB 的 mp4 —— deflate 6 花了 3.13s、产物 72.0MB；直接 STORED 只要 **0.43s**。
+# 只列「确定压不动」的媒体与压缩容器；**exe / dll / pdf 不在此列**（它们常能压 20~50%），
+# bmp / wav 这类无损原始数据也保留压缩（能压 30~70%）。
+NON_COMPRESSIBLE_EXTS: frozenset[str] = frozenset({
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".avif", ".raw",
+    ".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v",
+    ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".opus", ".aac",
+    ".zip", ".rar", ".7z", ".gz", ".bz2", ".xz", ".zst", ".iso", ".dmg",
+    ".woff", ".woff2",
+})
+
+
+# **同一时刻最多几个读盘**（进程级预算，`fsutil._io_slot` 的信号量按它建）。
+# 两层哈希剩下的唯一大头是**打开文件**，而 Windows 的 CreateFile /
+# readinto / hashlib.update(>2KB) 都释放 GIL —— 实测 8 路下整文件哈希 2.2×。
+# **封顶 8**：机械盘上并发读会因寻道互相拖累，所以也留了环境变量给人调小。
+# 注意它是**全局**的：任务少时能跑满 8 路，两个查重同时跑就各分一半 ——
+# 否则 8×2 = 16 路并发读盘反而更慢（实测每个慢 2.3×、总吞吐低 20%）。
+HASH_WORKERS = max(1, min(int(os.getenv("FILEPILOT_HASH_WORKERS") or 8), os.cpu_count() or 4))
+
+
+@lru_cache(maxsize=8)
+def junk_matchers(skip: frozenset[str] = frozenset()) -> tuple[tuple[dict, "re.Pattern | None"], ...]:
+    """JUNK_RULES 的「(规则, 预编译正则)」有序表，`skip` 里的规则不参与模式匹配。
+
+    垃圾扫描、Agent 的垃圾查询、垃圾解释三处共用同一张表 —— 规则仍只写在 JUNK_RULES，
+    只是把 glob 编译一次（见 `glob_matcher` 的注释：逐个 fnmatch 是纯开销）。
+    三处的 skip 集合略有不同（谁单独处理零字节/空目录），所以做成参数。
+    """
+    return tuple(
+        (rule, glob_matcher(tuple(rule.get("patterns") or ())))
+        for rule in JUNK_RULES
+        if rule["id"] not in skip
+    )
+
+
+# ---------------------------------------------------------------------------
 # 虚拟整理预览（只读）：把文件按维度聚成「假想整理后」的结构，不动任何文件
 # ---------------------------------------------------------------------------
 
@@ -327,6 +529,12 @@ PROJECT_MARKERS: list[dict] = [
     {"file": "Gemfile", "label": "Ruby"},
     {"file": "pubspec.yaml", "label": "Flutter"},
 ]
+
+# 标记模式在导入时编译一次。原来是 15 个标记 × 目录里每个名字各调一次 fnmatch
+# （每次还带两次 normcase）—— 虚拟整理里这占了约三成时间。
+_MARKER_MATCHERS: tuple[tuple[str, re.Pattern | None], ...] = tuple(
+    (marker["label"], glob_matcher((marker["file"],))) for marker in PROJECT_MARKERS
+)
 
 LOOSE_PROJECT_KEY = "__loose__"
 
@@ -421,12 +629,15 @@ def project_marker_for(names) -> str | None:
     """目录里出现任一项目标记就返回项目类型标签，否则 None。
 
     规则只写在这里：整理预览的「按项目」与项目雷达共用同一套判断。
+    匹配走 `_MARKER_MATCHERS` 里预编译好的正则（见上方注释）。
     """
-    lowered = {str(name).lower() for name in names}
-    for marker in PROJECT_MARKERS:
-        pattern = marker["file"].lower()
-        if any(fnmatch.fnmatch(name, pattern) for name in lowered):
-            return marker["label"]
+    lowered = [str(name).lower() for name in names]
+    for label, matcher in _MARKER_MATCHERS:
+        if matcher is None:
+            continue
+        for name in lowered:
+            if matcher.match(name):
+                return label
     return None
 
 

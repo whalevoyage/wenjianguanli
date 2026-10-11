@@ -147,6 +147,7 @@ def run_clean(ctx: JobContext) -> dict:
 def restore_trash(ids: list[str]) -> dict:
     if not ids:
         raise ValueError("请选择要还原的项目")
+    permissions.require_write("还原隔离区里的文件")
     targets = set(ids)
     entries = store.read_trash()
     restored: list[dict] = []
@@ -172,12 +173,17 @@ def restore_trash(ids: list[str]) -> dict:
             keep.append(entry)
 
     store.save_trash(keep)
+    # 还原后原桶会空掉，得和 purge_trash 一样回收 —— 少了这一步，每「清理→还原」一轮
+    # 就在隔离区留一个空目录。实测用户机器上 136 个桶里 134 个是空的。
+    _prune_empty_buckets()
     return {"restored_count": len(restored), "restored": restored, "errors": errors}
 
 
 def purge_trash(ids: list[str]) -> dict:
+    """彻底删除隔离区里的条目。**不可恢复**，所以门禁也拦最狠的一档。"""
     if not ids:
         raise ValueError("请选择要彻底删除的项目")
+    permissions.require_write("永久删除隔离区里的文件（这一步不可恢复）")
     targets = set(ids)
     entries = store.read_trash()
     purged = 0
@@ -236,10 +242,19 @@ def _size_of(path: Path) -> int:
         except OSError:
             return 0
     total = 0
-    for current, _dirs, files in os.walk(path):
-        for name in files:
+    stack = [str(path)]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as iterator:
+                entries = list(iterator)
+        except OSError:
+            continue
+        for entry in entries:
             try:
-                total += (Path(current) / name).stat().st_size
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(entry.path)
+                    continue
+                total += entry.stat().st_size      # Windows 上目录列表已带回属性，零系统调用
             except OSError:
                 continue
     return total

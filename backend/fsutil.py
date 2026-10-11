@@ -8,7 +8,9 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
@@ -36,12 +38,38 @@ def format_size(value: int | float) -> str:
     return f"{size:.1f} TB"
 
 
+def format_mtime(ts: float) -> str:
+    """时间戳 → "YYYY-MM-DD HH:MM"。
+
+    刻意用 f-string 拼，不用 `strftime` —— 实测 3000 个时间戳 9.2ms → 3.7ms（**2.5×**），
+    输出逐字节一致。逐文件调用时这是实打实的钱（扫描分析里 strftime 曾占 16%）。
+    """
+    try:
+        d = datetime.fromtimestamp(ts)
+    except (OSError, OverflowError, ValueError):
+        return "—"
+    return f"{d.year:04d}-{d.month:02d}-{d.day:02d} {d.hour:02d}:{d.minute:02d}"
+
+
+def format_date(ts: float) -> str:
+    """时间戳 → "YYYY-MM-DD"（项目雷达用）。同 format_mtime，理由一样。"""
+    try:
+        d = datetime.fromtimestamp(ts)
+    except (OSError, OverflowError, ValueError):
+        return "—"
+    return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
+
+
 # ---------------------------------------------------------------------------
 # 路径解析与安全拦截
 # ---------------------------------------------------------------------------
 
-class BlockedPathError(Exception):
-    """命中了不可碰的安全黑名单。"""
+class BlockedPathError(ValueError):
+    """命中了不可碰的安全黑名单。
+
+    继承 ValueError 而不是 Exception：路由层的统一兜底是 `except (OSError, ValueError)`，
+    继承 Exception 的话它会直接逃出去变成 500 —— 明明是一次「友好拒绝」，却报成服务端崩溃。
+    """
 
 
 def _resolved(path: Path | str) -> Path:
@@ -104,14 +132,57 @@ def normalize(value: str) -> Path:
     return Path(raw).expanduser()
 
 
-def is_blocked(path: Path) -> str | None:
-    """命中黑名单时返回原因，允许操作时返回 None。"""
+_SELF_PROTECTED_NORMS: list[tuple[str, str]] | None = None
+
+
+def _self_protected_norms() -> list[tuple[str, str]]:
+    """把自保护目录预解析成「小写绝对前缀」，只算一次。
+
+    SELF_PROTECTED_DIRS 在进程启动时就已经由 config 定死（STATE_DIR 跟着环境变量走），
+    运行期不会变，所以缓存是安全的；长度对不上时重建，避免测试里改了配置却读到旧值。
+    """
+    global _SELF_PROTECTED_NORMS
+    if _SELF_PROTECTED_NORMS is None or len(_SELF_PROTECTED_NORMS) != len(config.SELF_PROTECTED_DIRS):
+        out: list[tuple[str, str]] = []
+        for blocked in config.SELF_PROTECTED_DIRS:
+            try:
+                text = str(blocked.resolve())
+            except (OSError, RuntimeError):
+                text = str(blocked)
+            out.append((blocked.name, os.path.normcase(os.path.abspath(text)).rstrip("\\/") + os.sep))
+        _SELF_PROTECTED_NORMS = out
+    return _SELF_PROTECTED_NORMS
+
+
+def is_self_protected(path: Path, *, assume_real: bool = False) -> str | None:
+    """**读取**遍历的黑名单：只含工具自身的目录，命中时返回原因。
+
+    以前这里查的是 `SAFETY_BLOCKLIST`（软保护 + 自保护），于是「扫描 C 盘」会**静默跳过桌面** ——
+    而桌面只是**写**保护（`full` 档本来就允许写），读却读不到，档位说一套做一套。
+    现在读剪枝只看自保护（运行数据 / 项目自身 / 隔离区账本），
+    软保护与系统只读区交给 `write_block_reason` 按档位处理。
+
+    `assume_real=True`：调用方保证这个路径是**真实目录**（不是符号链接/联接点），
+    于是走纯字符串比较、不做 `resolve()`。遍历时必须传它 —— `os.walk(followlinks=False)`
+    和 `entry.is_dir(follow_symlinks=False)` 都不会进链接，路径就是真身，
+    而 `resolve()` 是逐目录一次的系统调用，在大树上很贵。
+    """
+    if assume_real:
+        try:
+            norm = os.path.normcase(os.path.abspath(str(path))).rstrip("\\/") + os.sep
+        except (OSError, ValueError):
+            return None
+        for name, prefix in _self_protected_norms():
+            if norm.startswith(prefix):
+                return f"「{name}」属于保护目录，禁止改动"
+        return None
+
     try:
         target = path.resolve()
     except (OSError, RuntimeError):
         target = path
 
-    for blocked in config.SAFETY_BLOCKLIST:
+    for blocked in config.SELF_PROTECTED_DIRS:
         try:
             resolved_blocked = blocked.resolve()
         except (OSError, RuntimeError):
@@ -191,62 +262,139 @@ def resolve_target(value: str) -> Path:
 # 遍历（带排除、深度限制、进度、可中断）
 # ---------------------------------------------------------------------------
 
-def _pruned(excludes: set[str], name: str) -> bool:
-    return name in excludes
+DirHook = Callable[[str, int, list[str], list[str]], None]
 
 
-def iter_files(
+def iter_entries(
     root: Path,
     *,
     excludes: Iterable[str] | None = None,
     max_depth: int | None = None,
     progress: ProgressFn | None = None,
     cancelled: CancelFn | None = None,
-) -> Iterator[Path]:
-    """遍历文件。会跳过排除目录、保护目录，超限自动停止。
+    total: int | None = None,
+    count_only: bool = False,
+    on_dir: DirHook | None = None,
+    skip_self_protected: bool = True,
+) -> Iterator[os.DirEntry]:
+    """遍历文件，产出 `os.DirEntry`。
+
+    **为什么要给 DirEntry 而不是 Path**：Windows 上目录列表本身就把 size/mtime 带回来了，
+    `entry.stat()` 直接复用、**零系统调用**；而只给路径的话，调用方拿大小必须再
+    `path.stat()` 一次 —— 每个文件一次系统调用，在大树上就是几倍的差距。
 
     max_depth=0 表示不限深度；1 表示只看 root 下一层。
+
+    `total`：调用方已知总条目数时可传进来，进度就能算真实百分比。
+    不传时，只要带了 `progress` 就**先自己数一遍**再开始。
+
+    `count_only`：内部专用，给 `count_entries` 标记"我就是在数数"，免得递归。
+
+    `on_dir(path, depth, raw_dirs, raw_files)`：每进一个目录回调一次，
+    给的是**裁剪前**的原始子目录名与文件名 —— 有些服务（如虚拟整理）要靠
+    `.git` 这类"不会被遍历但存在即证据"的目录名判断项目归属，
+    光看 yield 出来的文件是看不到的。传了才会有额外开销（多筛一遍名字）。
+
+    `skip_self_protected=False`：只剪系统只读区，不剪自保护目录。
+    只读预览类服务用得上 —— 否则预览自己的项目目录会是一片空白。
     """
     exclude_set = set(config.DEFAULT_EXCLUDES) | set(config.IMPLICIT_EXCLUDES)
     if excludes is not None:
         exclude_set = set(excludes) | set(config.IMPLICIT_EXCLUDES)
 
-    root_depth = len(root.resolve().parts)
-    scanned = 0
+    if not count_only and total is None and progress is not None:
+        # 注意签名：ProgressFn 是 (message, current, total, path)，第一个是消息
+        def _counting(_message: str, done: int, _total: int | None, where: str) -> None:
+            # **数字写进消息里**：这个阶段还没有总数（正因为不知道才要数），
+            # 百分比无从算起，唯一真实且在动的信号就是"已经数了多少"。
+            # 不带它的话界面只剩一句静止的提示，看着像卡死。
+            progress(f"正在统计条目数 —— 已数 {done:,} 项", done, None, where)
 
-    for current, subdirs, filenames in os.walk(root):
+        total = count_entries(
+            root, excludes=excludes, max_depth=max_depth, cancelled=cancelled, progress=_counting
+        ) or None
+
+    scanned = 0
+    stack: list[tuple[str, int]] = [(str(root), 0)]
+    want_raw = on_dir is not None
+
+    while stack:
         if cancelled and cancelled():
             return
+        current, depth = stack.pop()
 
-        current_path = Path(current)
-        current_depth = len(current_path.resolve().parts) - root_depth
+        try:
+            with os.scandir(current) as iterator:
+                entries = list(iterator)
+        except OSError:
+            continue
 
-        # 深度裁剪 + 排除裁剪（max_depth 为 0/None 表示不限深度）
-        if max_depth and current_depth >= max_depth:
-            subdirs[:] = []
-        else:
-            kept = []
-            for name in subdirs:
-                if _pruned(exclude_set, name):
+        raw_dirs: list[str] = []
+        raw_files: list[str] = []
+
+        if want_raw:
+            # 先分拣一遍（is_dir 在 Windows 上命中 DirEntry 自己的缓存，不额外打系统调用），
+            # 好让 on_dir **在这个目录的文件 yield 之前**就拿到全部原始条目名 ——
+            # 要靠目录名提前建立上下文的调用方（虚拟整理的项目归属）依赖这个顺序。
+            for entry in entries:
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                except OSError:
+                    is_dir = False
+                (raw_dirs if is_dir else raw_files).append(entry.name)
+            on_dir(current, depth, raw_dirs, raw_files)
+
+        for entry in entries:
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            if is_dir:
+                if entry.name in exclude_set:
                     continue
-                if is_blocked(current_path / name) or is_readonly_zone(current_path / name):
+                if max_depth and depth + 1 > max_depth:
                     continue
-                kept.append(name)
-            subdirs[:] = kept
+                child = Path(entry.path)
+                # assume_real=True：既不跟随链接，拿到的是真身路径，不必 resolve()
+                if (skip_self_protected and is_self_protected(child, assume_real=True)) or is_readonly_zone(child):
+                    continue
+                stack.append((entry.path, depth + 1))
+                continue
 
-        for name in filenames:
             scanned += 1
             if scanned > config.SCAN_ENTRY_LIMIT:
                 return
             if progress and scanned % 200 == 0:
-                progress("正在遍历目录", scanned, None, str(current_path))
-            yield current_path / name
+                progress("正在遍历目录", scanned, total, current)
+            yield entry
 
 
-def count_entries(root: Path, *, excludes: Iterable[str] | None = None) -> int:
-    """快速估算条目数，用于进度百分比。"""
+def iter_files(root: Path, **kwargs) -> Iterator[Path]:
+    """遍历文件，产出 `Path`（既有契约，5 个服务在用）。
+
+    内部走 `iter_entries`，遍历逻辑只写一遍；这里只是把入口路径包成 Path。
+    新代码如果需要文件大小，**优先用 `iter_entries`** —— 能省掉每文件一次系统调用。
+    """
+    for entry in iter_entries(root, **kwargs):
+        yield Path(entry.path)
+
+
+def count_entries(
+    root: Path,
+    *,
+    excludes: Iterable[str] | None = None,
+    max_depth: int | None = None,
+    cancelled: CancelFn | None = None,
+    progress: ProgressFn | None = None,
+) -> int:
+    """数一遍会产出多少条目，用于给进度算百分比。
+
+    内部走 `count_only=True`：只负责数，不再触发 iter_entries 的自动计数（会递归）。
+    带了 `progress` 就边数边报 —— 大目录上计数本身也要跑一会儿，不能静默。
+    """
     total = 0
-    for _ in iter_files(root, excludes=excludes):
+    for _ in iter_entries(root, excludes=excludes, max_depth=max_depth,
+                          cancelled=cancelled, count_only=True, progress=progress):
         total += 1
     return total
 
@@ -258,23 +406,115 @@ def count_entries(root: Path, *, excludes: Iterable[str] | None = None) -> int:
 CHUNK = 1024 * 1024
 
 
-def hash_file(path: Path, *, cancelled: CancelFn | None = None) -> str:
+# ---------------------------------------------------------------------------
+# 进程级「同时读盘」闸门
+#
+# 为什么需要它：每个查重任务会自己开 config.HASH_WORKERS 个线程，而任务队列同时能跑 2 个
+# （JobManager 的 ThreadPoolExecutor(max_workers=2)）—— 两个查重并发就是 8×2=16 个并发读盘，
+# **过订阅**。实测每个任务反而慢 2.3×、总吞吐低 20%（见 docs/GOTCHAS.md 第八节）。
+#
+# 为什么放在这一层：这是「同一时刻最多有几个读盘」的策略，所有从这里读文件的地方
+# （整文件哈希、文件头哈希、复制校验）都该受它约束。单线程调用方拿一次信号量几乎不花钱
+# （无竞争时几十纳秒）。
+#
+# 为什么用信号量、而不是直接把 HASH_WORKERS 调小：任务少时照样能跑满 8 路，
+# 任务多了自动互相让路；**被挡住的线程阻塞在信号量上、不烧 CPU**。
+# ---------------------------------------------------------------------------
+
+_IO_GATE: threading.BoundedSemaphore | None = None
+_IO_GATE_LOCK = threading.Lock()
+
+
+def _io_gate() -> threading.BoundedSemaphore:
+    """懒建 —— 这样测试里改完 `config.HASH_WORKERS` 再建也生效。"""
+    global _IO_GATE
+    if _IO_GATE is None:
+        with _IO_GATE_LOCK:
+            if _IO_GATE is None:
+                _IO_GATE = threading.BoundedSemaphore(max(1, config.HASH_WORKERS))
+    return _IO_GATE
+
+
+def reset_io_gate() -> None:
+    """丢掉现有闸门，下次用时按当前 `config.HASH_WORKERS` 重建（测试用）。"""
+    global _IO_GATE
+    with _IO_GATE_LOCK:
+        _IO_GATE = None
+
+
+@contextmanager
+def _io_slot() -> Iterator[None]:
+    """占一个读盘名额。并发读文件都要从这里过，详见上面那段说明。"""
+    gate = _io_gate()
+    gate.acquire()
+    try:
+        yield
+    finally:
+        gate.release()
+
+
+class _CancelAwareReader:
+    """包一层文件对象，让 `hashlib.file_digest` 也能响应取消。
+
+    `file_digest` 是 C 实现，比 Python 里 `while: read()` 循环快一截；
+    但它一口气读到尾，中间没有插取消检查的机会 —— 大文件上"点了取消没反应"。
+    包一层 `readinto` / `read`，每块检查一次，两全。
+    """
+
+    __slots__ = ("_stream", "_cancelled")
+
+    def __init__(self, stream, cancelled: CancelFn | None) -> None:
+        self._stream = stream
+        self._cancelled = cancelled
+
+    def _check(self) -> None:
+        if self._cancelled is not None and self._cancelled():
+            raise InterruptedError("已取消")
+
+    def readable(self) -> bool:
+        # file_digest 会先问这一句，没有就直接拒收
+        return True
+
+    def readinto(self, buffer):  # noqa: ANN001
+        self._check()
+        return self._stream.readinto(buffer)
+
+    def read(self, size: int = -1):  # noqa: ANN201
+        self._check()
+        return self._stream.read(size)
+
+
+_FILE_DIGEST = getattr(hashlib, "file_digest", None)
+
+
+def _hash_file_loop(stream, cancelled: CancelFn | None) -> str:
     hasher = hashlib.sha256()
-    with path.open("rb") as stream:
-        while True:
-            if cancelled and cancelled():
-                raise InterruptedError("已取消")
-            block = stream.read(CHUNK)
-            if not block:
-                break
-            hasher.update(block)
+    while True:
+        if cancelled and cancelled():
+            raise InterruptedError("已取消")
+        block = stream.read(CHUNK)
+        if not block:
+            break
+        hasher.update(block)
     return hasher.hexdigest()
+
+
+def hash_file(path: Path, *, cancelled: CancelFn | None = None) -> str:
+    # 读盘走进程级闸门：串行调用方几乎不花钱，并发时自动限流（见 _io_slot）
+    with _io_slot(), path.open("rb") as stream:
+        if _FILE_DIGEST is not None:
+            try:
+                return _FILE_DIGEST(_CancelAwareReader(stream, cancelled), "sha256").hexdigest()
+            except ValueError:
+                # 某些版本（如 3.13 的 C 实现）对 fileobj 更挑剔，退回循环读块
+                stream.seek(0)
+        return _hash_file_loop(stream, cancelled)
 
 
 def quick_hash(path: Path, size: int = 4096) -> str:
     """只读文件头，用于查重前两级快速过滤。"""
     hasher = hashlib.sha256()
-    with path.open("rb") as stream:
+    with _io_slot(), path.open("rb") as stream:
         hasher.update(stream.read(size))
     return hasher.hexdigest()
 
@@ -336,7 +576,23 @@ def build_tree(
     progress: ProgressFn | None = None,
     cancelled: CancelFn | None = None,
 ) -> dict:
-    """构建带大小的目录树，只展开 depth 层，深层合并进 other。"""
+    """构建带大小的目录树，只展开 depth 层，深层折叠。
+
+    顺带回收两样**界面必须知道、但以前拿不到**的事实（少了它们这张图就读不懂）：
+
+    - 每个文件节点的 `category`：界面按类型上色靠它。以前不返回，
+      所有文件都落到「其他」那一档灰，整张图变成一个颜色。
+    - `skipped`：被剪掉的目录名 + 次数。系统只读区 / 用户排除项 / 自保护目录
+      **永远不会进这棵树**，于是「C 盘只用了 3.4 GB」这种数字会误导人 ——
+      界面要靠它如实写出「跳过了什么、跳过了几个」。
+    """
+
+    # 排除表只算一次。原来在每个目录里都重建两个 set，纯浪费。
+    exclude_set = set(config.DEFAULT_EXCLUDES) | set(config.IMPLICIT_EXCLUDES)
+    if excludes is not None:
+        exclude_set = set(excludes) | set(config.IMPLICIT_EXCLUDES)
+
+    skipped: dict[str, int] = {}
 
     def walk(path: Path, level: int) -> dict:
         node = {"name": path.name or str(path), "path": str(path), "size": 0, "is_dir": True, "children": []}
@@ -345,16 +601,13 @@ def build_tree(
         except OSError:
             return node
 
-        exclude_set = set(config.DEFAULT_EXCLUDES) | set(config.IMPLICIT_EXCLUDES)
-        if excludes is not None:
-            exclude_set = set(excludes) | set(config.IMPLICIT_EXCLUDES)
-
         for entry in entries:
             if cancelled and cancelled():
                 return node
             try:
                 if entry.is_dir(follow_symlinks=False):
-                    if entry.name in exclude_set or is_blocked(Path(entry.path)):
+                    if entry.name in exclude_set or is_self_protected(Path(entry.path)):
+                        skipped[entry.name] = skipped.get(entry.name, 0) + 1
                         continue
                     child = walk(Path(entry.path), level + 1) if level < depth else {
                         "name": entry.name, "path": entry.path, "size": 0, "is_dir": True, "children": [], "collapsed": True,
@@ -367,6 +620,7 @@ def build_tree(
                     node["children"].append({
                         "name": entry.name, "path": entry.path,
                         "size": stat.st_size, "is_dir": False,
+                        "category": config.category_for(entry.path),
                     })
             except OSError:
                 continue
@@ -378,6 +632,13 @@ def build_tree(
 
     tree = walk(root, 1)
     tree["size_text"] = format_size(tree["size"])
+    tree["depth"] = depth
+    # 按出现次数排；只留前 12 个名字，够界面说清楚「跳过了什么」
+    tree["skipped"] = [
+        {"name": name, "count": count}
+        for name, count in sorted(skipped.items(), key=lambda kv: (-kv[1], kv[0]))[:12]
+    ]
+    tree["skipped_total"] = sum(skipped.values())
     return tree
 
 

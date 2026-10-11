@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { CircleCheck, CircleClose, RefreshLeft, VideoPause } from '@element-plus/icons-vue'
 import { formatDateTime } from '../utils/formatters'
@@ -68,11 +68,50 @@ const progressPercent = computed(() => {
   return Math.max(0, Math.min(99, props.job?.percent ?? 0))
 })
 
+/**
+ * 「没有总数」的阶段：百分比无从算起，所以**不摆一个死数字**。
+ *
+ * 最典型的是预热统计（`iter_entries` 先数一遍才能算百分比）——
+ * 那一段可能几十秒，而且**必然**是 0%。这时候进度条走不确定态，
+ * 右边只留实时在走的秒数，真正在动的信息由 message 里的「已数 N 项」承担。
+ */
+const unknownScope = computed(() => isRunning.value
+  && props.job?.status === 'running'
+  && !props.job?.total
+  && progressPercent.value === 0)
+
+/**
+ * 「已运行」必须有一个**自己会走的时钟**。
+ *
+ * computed 只在依赖变化时重算，而后端在长阶段（统计条目数、大文件哈希）
+ * 可能几十秒不推事件 —— 秒数就会停在最后一次事件的那一刻，看着像卡死。
+ * 所以这里挂一个 1 秒的 interval，让 `elapsed` 依赖 `nowTick`。
+ */
+const nowTick = ref(Date.now())
+let ticker = null
+
+function stopTicker() {
+  if (ticker) {
+    clearInterval(ticker)
+    ticker = null
+  }
+}
+
+watch(isRunning, (running) => {
+  stopTicker()
+  if (running && !props.job?.finished_at) {
+    nowTick.value = Date.now()
+    ticker = setInterval(() => { nowTick.value = Date.now() }, 1000)
+  }
+}, { immediate: true })
+
+onBeforeUnmount(stopTicker)
+
 const elapsed = computed(() => {
   const started = props.job?.started_at
   const finished = props.job?.finished_at
   if (!started) return ''
-  const end = finished ? new Date(finished) : new Date()
+  const end = finished ? new Date(finished) : new Date(nowTick.value)
   const seconds = Math.max(0, Math.round((end - new Date(started)) / 1000))
   if (seconds < 60) return `${seconds} 秒`
   return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
@@ -160,15 +199,17 @@ const metaText = computed(() => [startTimeText.value, elapsedText.value].filter(
     </div>
 
     <template v-if="showLive">
-      <div class="bar">
-        <div class="bar__fill" :style="{ width: `${progressPercent}%` }"></div>
+      <div class="bar" :class="{ 'is-unknown': unknownScope }">
+        <div v-if="unknownScope" class="bar__fill bar__fill--unknown"></div>
+        <div v-else class="bar__fill" :style="{ width: `${progressPercent}%` }"></div>
       </div>
 
       <div class="job-progress__live">
         <span class="job-progress__message">{{ job.message }}</span>
         <span class="job-progress__stats">
           <template v-if="job.total"> {{ job.current }} / {{ job.total }} · </template>
-          {{ progressPercent }}%<template v-if="elapsed"> · {{ elapsed }}</template>
+          <template v-if="!unknownScope">{{ progressPercent }}%<template v-if="elapsed"> · </template></template>
+          <template v-if="elapsed">{{ elapsed }}</template>
         </span>
       </div>
 
@@ -343,10 +384,49 @@ const metaText = computed(() => [startTimeText.value, elapsedText.value].filter(
 }
 
 .bar__fill {
+  position: relative;
   height: 100%;
   background: var(--primary);
   border-radius: var(--radius-pill);
   transition: width var(--duration-slow) var(--ease);
+}
+
+/* 运行中给条子加一道流动高光：百分比在"没有总数"的阶段本来就算不出来，
+   高光只是把「还在动」这件事画出来 —— **宽度仍是真实百分比，不编数字**。 */
+.bar__fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 32%, var(--bar-sheen) 50%, transparent 68%);
+  background-size: 220% 100%;
+  animation: jp-sheen 1.5s linear infinite;
+}
+
+@keyframes jp-sheen {
+  from { background-position: 220% 0; }
+  to   { background-position: -80% 0; }
+}
+
+/* 没有总数可算（预热统计阶段）→ 走不确定态：一个来回滑动的片段，
+   不假装任何完成度。 */
+.bar__fill--unknown {
+  width: 34%;
+  animation: jp-slide 1.35s linear infinite;
+}
+
+.bar__fill--unknown::after {
+  content: none;
+  animation: none;
+}
+
+@keyframes jp-slide {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(300%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar__fill::after { animation: none; }
+  .bar__fill--unknown { animation: none; transform: none; }
 }
 
 .job-progress__live {

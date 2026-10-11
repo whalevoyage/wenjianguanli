@@ -1,7 +1,18 @@
 import axios from 'axios'
 
+// 开发环境：直连本地后端 8000（vite.config.js 里另配了 /api 代理，两条路都通）。
+// 打包环境：走**相对路径**，跟着页面自己的来源走。
+//
+// 为什么打包后绝不能写死端口：发行版由后端同源托管前端，而启动器会在
+// 8000 被占用时挑一个空闲端口 —— 写死了端口，界面就再也找不到后端
+// （表现是「无法连接 FilePilot 后端」+ 首页一片空）。
+//
+// 注意别把 dev 那条也改成相对路径：那样就**依赖 vite 代理必须生效**，
+// 而改 vite.config.js 需要重启开发服务器，别人的服务器没重启就整个用不了。
+// 用 import.meta.env.DEV 分支则只改源码即可，HMR 立刻生效。
+const DEV_API = 'http://127.0.0.1:8000/api'
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api',
+  baseURL: import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? DEV_API : '/api'),
   timeout: 0,
   headers: { 'Content-Type': 'application/json' },
 })
@@ -29,6 +40,15 @@ export const getOverview = () => unwrap(api.get('/overview'))
 /* ---------------- 任务 ---------------- */
 export const listJobs = (limit = 50) => unwrap(api.get('/jobs', { params: { limit } }))
 export const getJob = jobId => unwrap(api.get(`/jobs/${jobId}`))
+
+/** 累计腾出多少空间（首页 / 日志页的正反馈） */
+export const getReclaimedStats = () => unwrap(api.get('/stats/reclaimed'))
+
+/** 找画面相似的图片（只读；结果里 available=false 表示缺 Pillow 依赖） */
+export const startSimilarScan = payload => unwrap(api.post('/similar/scan', payload))
+
+/** 让模型解释一个待清理项是什么 —— ⚠️ 会联网花 token，只在用户主动点时才调 */
+export const explainItem = payload => unwrap(api.post('/agent/explain', payload))
 /* 取消任务时带上调用栈：后端会把它写进审计日志，
    事后一眼就能看出这次取消是「用户点了按钮」还是「某处代码自动调的」。 */
 export function cancelJob(jobId, reason = '') {
@@ -179,7 +199,10 @@ export const getAgentTools = () => unwrap(api.get('/agent/tools'))
 export const getAgentContext = () => unwrap(api.get('/agent/context'))
 
 /** 偏好记忆（常用路径 / 排除标签 / 永久约束 / 常用策略）。 */
-export const getAgentPrefs = () => unwrap(api.get('/agent/prefs'))
+// 传 conversation_id 时额外返回「本会话最近用过的路径」（recent_paths）——
+// 那是自动记的、跟着会话走；不传就只要全局长期偏好。
+export const getAgentPrefs = conversationId =>
+  unwrap(api.get('/agent/prefs', { params: conversationId ? { conversation_id: conversationId } : {} }))
 export const saveAgentPrefs = prefs => unwrap(api.post('/agent/prefs', { prefs }))
 
 /* ---------------- Agent 多步骤任务 ----------------
@@ -196,6 +219,12 @@ export const approveAgentTask = jobId => unwrap(api.post(`/agent/task/${encodeUR
 /** 修改方案：只换条件重算（零 token），仍停在等待确认，不会自动动文件。 */
 export const reviseAgentTask = (jobId, constraints) =>
   unwrap(api.post(`/agent/task/${encodeURIComponent(jobId)}/revise`, { constraints }))
+
+/* 草稿阶段的修改方案：方案还没建任务，所以同一个 /agent/plan 改走重算分支，
+   意图由前端带回。与 reviseAgentTask 共用同一套条件通道，结果一致。
+   message 必填但重算分支不读它——留着是为了两条路径请求形状一致。 */
+export const reviseAgentPlan = (message, intent, constraints, context = {}) =>
+  unwrap(api.post('/agent/plan', { message, context, revise: { intent, constraints } }))
 
 /** 任务结果观察：读成「人话总结 + 失败归因 + 下一步」，零 token。 */
 export const observeAgentJob = jobId => unwrap(api.get(`/agent/observe/${encodeURIComponent(jobId)}`))

@@ -18,14 +18,15 @@ def _plan_items(ctx: JobContext, source: Path, target: Path, excludes, min_size:
     ctx.phase(0, f"正在列举 {source} 下待迁移的文件")
     exts = {e.lower().lstrip(".") for e in (include_ext or []) if e}
     plan: list[dict] = []
-    for path in fsutil.iter_files(source, excludes=excludes, progress=ctx.tick, cancelled=ctx.cancelled):
+    for entry in fsutil.iter_entries(source, excludes=excludes, progress=ctx.tick, cancelled=ctx.cancelled):
         ctx.check_cancel()
         try:
-            stat = path.stat()
+            stat = entry.stat()          # Windows 上目录列表已带回属性，零系统调用
         except OSError:
             continue
         if stat.st_size < min_size:
             continue
+        path = Path(entry.path)
         if exts and path.suffix.lower().lstrip(".") not in exts:
             continue
         relative = path.relative_to(source)

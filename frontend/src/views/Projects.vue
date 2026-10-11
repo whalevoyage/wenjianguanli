@@ -5,6 +5,8 @@ import { Aim, FolderOpened, PieChart, Timer, Warning } from '@element-plus/icons
 import { startProjectScan } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
+import { useHandoffTarget } from '../composables/useHandoff'
+import HandoffNote from '../components/HandoffNote.vue'
 import DataTable from '../components/DataTable.vue'
 import EmptyState from '../components/EmptyState.vue'
 import JobProgress from '../components/JobProgress.vue'
@@ -23,6 +25,8 @@ const { config, excludes, load: loadConfig } = useConfig()
 const scan = useJob('projects')
 
 const path = ref('')
+/* 跨页接力：从别的页面带着目录过来时，直接填好这个框（不自动开跑） */
+const { handed, from } = useHandoffTarget(path)
 const zombieDays = ref(180)
 const maxDepth = ref(0)
 const onlyZombie = ref(false)
@@ -160,6 +164,8 @@ onMounted(async () => {
   <div class="section-stack form-page">
 
     <section class="app-card panel-card">
+      <HandoffNote v-if="handed" :path="handed" :from="from" @dismiss="handed = ''" />
+
       <TargetPicker
         v-model:path="path"
         v-model:excludes="excludes"

@@ -93,7 +93,7 @@ const navGroups = [
   {
     label: '分析',
     items: [
-      { path: '/space', label: '空间地图', hint: 'Treemap 钻取', icon: PieChart },
+      { path: '/space', label: '空间地图', hint: '看清谁在占空间', icon: PieChart },
       { path: '/virtual', label: '整理预览', hint: '只读 · 不动文件', icon: Files },
       { path: '/projects', label: '项目雷达', hint: '体积 · 活跃 · 僵尸', icon: Aim },
       { path: '/scan', label: '扫描分析', hint: '目录 · 大文件', icon: Search },

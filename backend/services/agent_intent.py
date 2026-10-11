@@ -32,7 +32,7 @@ import os
 import re
 from pathlib import Path
 
-from .. import config, fsutil, permissions
+from .. import config, fsutil
 from .agent_tools import ACTION_PARAMS, PATH_PARAMS, WRITE_ACTIONS
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,10 @@ import { cancelJob, rollbackJob, subscribeJob } from '../api/filepilot'
  * **key 很重要**：它决定这个订阅的身份。切换选项卡时组件会被卸载，
  * 但任务在后端仍在跑——有了 key，回到这一页时会自动把上次的进度接回来，
  * 不会再出现「切走再回来，进度没了，看起来像任务被取消」的错觉。
+ *
+ * **key 也可以传函数**（`useJob(() => conversationId.value)`），
+ * 用于 key 会变、但组件不想重建的场景 —— Agent 页就是：
+ * 任务卡必须跟着会话走，同一个组件实例换个会话就得换槽位。
  */
 const ACTIVE_JOBS = new Map()
 
@@ -22,8 +26,20 @@ export function useJob(key = '') {
 
   const finished = computed(() => TERMINAL.includes(job.value?.status || ''))
 
+  /** 当前槽位名。key 传函数时就地求值 —— 所以调用点必须每次现算，不能提前存下来。 */
+  const keyOf = () => String((typeof key === 'function' ? key() : key) || '')
+
+  /** 清掉当前订阅。只断开连接，**绝不取消后端任务**。 */
+  function clear() {
+    closeStream?.()
+    closeStream = null
+    job.value = null
+    running.value = false
+  }
+
   function attach(jobId, restarted = false) {
-    if (key) ACTIVE_JOBS.set(key, jobId)
+    const slot = keyOf()
+    if (slot) ACTIVE_JOBS.set(slot, jobId)
     closeStream?.()
     running.value = true
     closeStream = subscribeJob(jobId, next => {
@@ -39,11 +55,20 @@ export function useJob(key = '') {
     return restarted
   }
 
-  /** 回到页面时，把上次那个还在跑的任务接回来 */
+  /**
+   * 回到页面 / 换到另一个槽位时，把那个槽位还在跑的任务接回来。
+   *
+   * **槽位为空时必须清掉手上的那条**：否则从 A 会话切到 B 会话，A 的任务卡会留在
+   * B 的屏幕上（2026-10-09 用户报的就是这个）。
+   */
   function restore() {
-    const saved = key ? ACTIVE_JOBS.get(key) : null
-    if (!saved || job.value?.id === saved) return
-    attach(saved)
+    const slot = keyOf()
+    const saved = slot ? ACTIVE_JOBS.get(slot) : null
+    if (saved) {
+      if (job.value?.id !== saved) attach(saved)
+      return
+    }
+    if (job.value) clear()
   }
 
   async function run(starter) {
@@ -66,8 +91,9 @@ export function useJob(key = '') {
 
   async function cancel() {
     if (!job.value?.id) return
+    const slot = keyOf()
     try {
-      job.value = await cancelJob(job.value.id, key ? `useJob(${key})` : 'useJob')
+      job.value = await cancelJob(job.value.id, slot ? `useJob(${slot})` : 'useJob')
       ElMessage.success('已请求中断任务')
     } catch (error) {
       ElMessage.error(error.message)

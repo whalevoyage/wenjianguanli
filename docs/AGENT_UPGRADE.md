@@ -17,8 +17,16 @@
 | 六 | 主动状态感知 | ~25% | **完成** |
 | 七 | 计划树 UI、风险、估算、修改与复盘 | ~20% | **完成** |
 
-> 「修改方案」目前是把原话放回输入框让你改条件再重发，**不是就地编辑参数**。
-> 真做成就地编辑（改体积阈值 / 排除项后重算）需要再动一版 UI，属于已知取舍。
+> 「修改方案」**两处都已支持就地编辑参数**（改体积阈值 / 排除标签 / 排除路径 /
+> 保留策略 / 迁移方式后零 token 重算），见下文第十二节：
+> - 任务停在 `waiting` 时走 `revise_task()`，沿用同一个 `job_id` 重算；
+> - 还没点「开始分析」的草稿走 `revise_plan_preview()`，不创建任务。
+>
+> 只有「运行中（非 `waiting`）」的计划树仍保留「改条件重说」这条退路——
+> 那一刻任务正在跑，改条件应该等它停下来，不该边跑边换约束。
+>
+> *（本节此前写的是「不是就地编辑参数，属于已知取舍」，与 `PlanTree.vue` 里
+> 早已存在的 `revise` 表单不符，已按实际行为改正。）*
 
 ---
 
@@ -229,10 +237,13 @@ prefs 的四类内容：常用路径 / 排除标签 / 排除路径 / 永久约�
 - `backend/store.py`：prefs 与会话快照读写
 - `backend/jobs.py`：`agent_task` 类型、`JobPaused`、续跑时换取消信号
 - `backend/services/agent.py`：收敛到 Intent、`status_context`、`summarize_job`、
-  `observe_job`、`plan_preview`、prefs 接口、`_trim_path`、`_looks_like_action`
-- `backend/main.py`：`/api/agent/{tools,context,prefs,plan,task,observe}`
-- `frontend/src/api/filepilot.js`：对应 API
-- `frontend/src/views/Agent.vue`：计划树、状态条、偏好面板、澄清选项、结果复盘
+  `observe_job`、`plan_preview`、`revise_task`、`revise_plan_preview`、
+  prefs 接口、`_trim_path`、`_looks_like_action`
+- `backend/main.py`：`/api/agent/{tools,context,prefs,plan,task,observe}`，
+  以及 `/api/agent/task/{job_id}/revise`；`/api/agent/plan` 另有 `revise` 重算分支
+- `frontend/src/api/filepilot.js`：对应 API（含 `reviseAgentTask` / `reviseAgentPlan`）
+- `frontend/src/views/Agent.vue`：计划树、状态条、偏好面板、澄清选项、结果复盘、
+  就地改条件（`revisePlan` / `reviseDraft`）
 
 ---
 
@@ -291,3 +302,112 @@ prefs 的四类内容：常用路径 / 排除标签 / 排除路径 / 永久约�
 另外两条（迁移、整理）都是这次复检才第一次执行，全挂。
 新写的分支一定要**至少各跑一次**，尤其是「目标动作 → 方案 → 确认 → 执行」这种多段链路，
 断在任何一段都表现为「点了没反应」。
+
+---
+
+## 十二、草稿阶段的就地改条件（2026-10-06 补齐）
+
+第一轮把「修改方案」做成了就地编辑，但只挂在**任务停在 `waiting`** 那一刻
+（`PlanTree` 的 `editable` ← `treeWaiting`）。**还没点「开始分析」的草稿**
+仍然退化成 `modifyPlan()`——把原话塞回输入框让你重说一遍。
+
+缺口的原因是重算入口不存在：`/api/agent/plan` 只收 `message` 重新解析，
+收不下条件补丁。
+
+### 改法
+
+| 文件 | 改动 |
+|---|---|
+| `services/agent.py` | 新增 `revise_plan_preview(intent, patch, context)`：复用 `sanitize_constraints` + `revise_payload` + `normalize`，零 token、不建任务、不落记忆、不调模型 |
+| `main.py` | `AgentPlanRequest` 加可选 `revise`（intent + constraints）；路由在 `revise` 非空时改走重算分支 |
+| `api/filepilot.js` | 新增 `reviseAgentPlan(message, intent, constraints, context)` |
+| `views/Agent.vue` | 新增 `reviseDraft(index, patch)` 与 `draftRevising`；草稿的 `PlanTree` 传 `editable` / `revise-busy` / `tag-options`，接 `@revise` |
+
+### 三个必须守住的点
+
+1. **runtime 与 `revise_task()` 逐字一致**（只给 `prefs` 与 `revise` 两个键）。
+   两处若喂不同上下文，同一个补丁会算出不同约束——「任务里改」和「草稿里改」
+   给出不一样的结果，比不支持就地编辑更糟。
+2. **补丁只能在服务端注入**。`_runtime_context()` 会主动 `pop` 掉上下文里的
+   `revise`，否则一次普通对话就能伪造条件，绕过模型侧「不许改排除项」的限制。
+3. **前端必须传 `plan.intent`，不能传消息上的 `msg.intent`**。后者是
+   `intent_view()` 的精简视图，不含 `action`，拿去重算会被判成「没有可修改的意图」。
+   这个坑只有真跑才发现——精简视图看起来「字段都在」。
+
+### 验证
+
+接口层（`--port 8011` 独立实例 + 临时 `FILEPILOT_DATA_DIR`，不碰真实状态目录）：
+
+- 同一条意图 + 补丁 → `min_size_mb` / `safe_only` / `exclude_tags` / `exclude_paths`
+  全部落到新方案上；标签还按 `resolve_excludes` 展开成了真实路径
+- 重算前后 `jobs` 与 `conversations` **都是 0 条**——零副作用坐实
+- 边界：空补丁 → 400「没有需要修改的条件」；无意图 → 400「这份方案没有可修改的意图」
+- 白名单：`exclude_tags: ["不存在的标签"]` 被丢弃、`exclude_tags` 保持空
+  （自由文本会变成「看起来排除了其实没排除」，比不排除更危险）
+- 正常预览 `扫描 D 盘` 未受影响
+
+界面层（Playwright 真实渲染，Chromium-1234 + `--disable-web-security` 跨端口）：
+
+- 草稿按钮从「改条件重说」变成「修改方案」，`hasLegacyBtn = false`
+- 编辑器 6 个排除标签 + 3 行（体积阈值 / 不动这些 / 排除路径）正常渲染
+- 改「体积阈值 50 + 勾上照片」后重算：7 步与步骤标题不变，约束从
+  「只取安全级」变成「不动 照片 · 排除 1 个目录 · 仅 ≥ 50 MB · 只取安全级」
+- 备注变成「已按新条件重算 · 零 token；…」，编辑器自动收起，token 元信息仍是 `0 token`
+- 后端 10 个前端用到的接口全 200；唯一 404 是 `favicon.ico`
+  （`index.html` 里没有 icon 链接，浏览器默认请求，属已知无害项）
+
+截图：`agent_revise_before_check.png` / `agent_revise_editor_check.png` / `agent_revise_after_check.png`
+
+### 刻意没做的
+
+- **没给单步计划卡加「修改方案」**。单步动作（扫描 / 整理预览这类）的参数就是
+  路径加一个阈值，重说一句比开表单更快；而 `PlanTree` 的 revise 表单是按多步方案
+  的约束集设计的，套到单步上会露出一堆用不上的字段。
+- **没让「运行中」的计划树可编辑**。任务正跑着，改条件应该等它停下来，
+  不该边跑边换约束。
+- **没动 `/api/agent/plan` 的 `message` 必填**。重算分支不读它，但保持必填能让
+  两条路径的请求形状一致，也免得前端在两种情况下传不同结构。
+
+---
+
+## 十三、对话记忆带上计划（2026-10-06）
+
+### 问题
+
+重开会话／刷新页面后，助手那一条只剩孤零零一句话，**计划卡全没了**。
+根因在 `restoreConversation()`：恢复历史时把 `plan` 写死成 `null`。
+
+再往下追是数据层面的：`agent_memory` 表只存 `role / content / created_at`，
+**计划从来没落过库**。前端的 `null` 不是偷懒，是真没东西可填。
+
+### 改法
+
+| 文件 | 改动 |
+|---|---|
+| `database.py` | `agent_memory` 加 `payload TEXT NOT NULL DEFAULT ''`；`append_memory` / `read_memory` 支持它 |
+| `database.py` | `_ensure_memory_payload()`：老库走 `PRAGMA table_info` + `ALTER TABLE` 补列 |
+| `services/agent.py` | `save_memory(..., payload=)` + `_memory_payload()` 白名单；`chat()` / `stream_chat()` 两处写入点都传完整 payload |
+| `views/Agent.vue` | `restoreConversation()` 读 payload 还原 plan / intent / steps / clarify 等 |
+
+### 三个必须守住的点
+
+1. **只存白名单字段。** `MEMORY_PAYLOAD_KEYS` 里是「重建这条回复长什么样」需要的
+   东西。存整份 payload 会把状态快照、磁盘剩余空间这类一次性数据也冻进历史——
+   那些数字第二天就是错的，还原出来反倒是误导。
+2. **正文与 payload 分开存，模型上下文不受影响。** `build_context_memory()` 只读
+   `role` / `content`，所以 payload 再大也不会挤占 token 预算。
+3. **迁移必须显式做。** `CREATE TABLE IF NOT EXISTS` 对已存在的表什么都不干，
+   光改建表语句**补不上老库的列**。`_ensure_memory_payload()` 每次连接时查一次
+   `PRAGMA table_info`，缺了才 ALTER。
+
+### 验证
+
+`--port 8011` 独立实例 + 临时 `FILEPILOT_DATA_DIR`（全新库走新建表路径），
+Playwright 真实渲染：发一句 → 出计划卡（`.plan` = 1、7 步）→ **刷新页面** →
+`.plan` 仍是 1、步骤仍是 7、消息元信息显示「来自记忆」。
+另用一份**旧 schema 的库**（不带 payload 列）单独验过 ALTER 迁移。
+
+### 取舍
+
+老记录恢复出来仍然只有文字——那时没有存计划，不拿正文去反推一个假计划出来。
+前端 `saved.payload || {}` 走空对象分支，退化成 v25 之前的样子。

@@ -9,12 +9,25 @@ import DataTable from '../components/DataTable.vue'
 import JobProgress from '../components/JobProgress.vue'
 import StatCard from '../components/StatCard.vue'
 import TargetPicker from '../components/TargetPicker.vue'
+import HandoffNote from '../components/HandoffNote.vue'
+import NextSteps from '../components/NextSteps.vue'
+import { useHandoffTarget } from '../composables/useHandoff'
 import { formatBytes, formatCount, formatDuration } from '../utils/formatters'
 
 const { config, excludes, load: loadConfig } = useConfig()
 const { job, running, run, cancel, rollback } = useJob('scan')
 
 const path = ref('')
+/* 跨页接力：从别的页面带着目录过来时直接填好；也能从这里把目录带给别的页面 */
+const { handed, from } = useHandoffTarget(path)
+
+/** 反向接力：用同一个目录去别的能力，不用再选一次 */
+const nextSteps = [
+  { name: 'duplicates', label: '查重' },
+  { name: 'junk', label: '清理' },
+  { name: 'space', label: '空间地图' },
+]
+
 const staleDays = ref(30)
 const result = ref(null)
 
@@ -126,6 +139,9 @@ onMounted(async () => {
   <div class="section-stack form-page">
 
     <section class="app-card panel-card">
+      <HandoffNote v-if="handed" :path="handed" :from="from" @dismiss="handed = ''" />
+
+
       <TargetPicker
         v-model:path="path"
         v-model:excludes="excludes"
@@ -169,6 +185,8 @@ onMounted(async () => {
       <section class="stats-grid">
         <StatCard v-for="item in metrics" :key="item.title" v-bind="item" />
       </section>
+
+      <NextSteps :path="path" origin="scan" :steps="nextSteps" />
 
       <el-alert
         v-if="result.warnings?.length"

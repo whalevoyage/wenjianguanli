@@ -57,7 +57,8 @@ def connect(path: Path) -> sqlite3.Connection:
         conversation_id TEXT NOT NULL,
         role TEXT NOT NULL,
         content TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_agent_memory_conversation ON agent_memory(conversation_id, id);
     CREATE TABLE IF NOT EXISTS agent_conversation_meta (
@@ -69,7 +70,20 @@ def connect(path: Path) -> sqlite3.Connection:
     CREATE INDEX IF NOT EXISTS idx_logs_time ON logs(time);
     CREATE INDEX IF NOT EXISTS idx_logs_type ON logs(type);
     """)
+    _ensure_memory_payload(conn)
     return conn
+
+
+def _ensure_memory_payload(conn: sqlite3.Connection) -> None:
+    """老库补列：`agent_memory.payload` 是后加的。
+
+    `CREATE TABLE IF NOT EXISTS` 对已存在的表什么都不做，所以只改建表语句**补不上**
+    已有数据库的列——必须在连接后显式 ALTER 一次。历史消息本来就没有计划可还原，
+    因此老行的 payload 保持空字符串（= 没有 payload），不编造。
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(agent_memory)").fetchall()}
+    if "payload" not in columns:
+        conn.execute("ALTER TABLE agent_memory ADD COLUMN payload TEXT NOT NULL DEFAULT ''")
 
 
 def append_log(path: Path, entry: dict[str, Any], limit: int) -> None:
@@ -163,16 +177,44 @@ def delete_schedule(path: Path, schedule_id: str) -> None:
         conn.execute("DELETE FROM schedules WHERE id=?", (schedule_id,))
 
 
-def append_memory(path: Path, conversation_id: str, role: str, content: str, created_at: str, limit: int = 400) -> None:
+def append_memory(
+    path: Path,
+    conversation_id: str,
+    role: str,
+    content: str,
+    created_at: str,
+    limit: int = 400,
+    payload: dict | None = None,
+) -> None:
+    """写一条对话记忆。`payload` 存这条消息额外要还原的结构（计划、意图、步骤…）。
+
+    正文仍然只存 content —— 喂给模型的是 build_context_memory，它只读 content，
+    所以 payload 再大也不会挤占模型的上下文预算。
+    """
+    raw = json.dumps(payload, ensure_ascii=False) if payload else ""
     with _lock, connect(path) as conn:
-        conn.execute("INSERT INTO agent_memory(conversation_id,role,content,created_at) VALUES(?,?,?,?)", (conversation_id, role, content, created_at))
+        conn.execute(
+            "INSERT INTO agent_memory(conversation_id,role,content,created_at,payload) VALUES(?,?,?,?,?)",
+            (conversation_id, role, content, created_at, raw[:20000]),
+        )
         conn.execute("DELETE FROM agent_memory WHERE conversation_id=? AND id NOT IN (SELECT id FROM agent_memory WHERE conversation_id=? ORDER BY id DESC LIMIT ?)", (conversation_id, conversation_id, limit))
 
 
 def read_memory(path: Path, conversation_id: str, limit: int = 20) -> list[dict]:
     with _lock, connect(path) as conn:
-        rows = conn.execute("SELECT role,content,created_at FROM agent_memory WHERE conversation_id=? ORDER BY id DESC LIMIT ?", (conversation_id, limit)).fetchall()
-    return [{"role": row["role"], "content": row["content"], "created_at": row["created_at"]} for row in reversed(rows)]
+        rows = conn.execute("SELECT role,content,created_at,payload FROM agent_memory WHERE conversation_id=? ORDER BY id DESC LIMIT ?", (conversation_id, limit)).fetchall()
+    result = []
+    for row in reversed(rows):
+        item = {"role": row["role"], "content": row["content"], "created_at": row["created_at"]}
+        raw = row["payload"]
+        if raw:
+            try:
+                item["payload"] = json.loads(raw)
+            except json.JSONDecodeError:
+                # 坏 payload 当没有处理，不影响正文与其它消息
+                pass
+        result.append(item)
+    return result
 
 
 def clear_memory(path: Path, conversation_id: str) -> None:

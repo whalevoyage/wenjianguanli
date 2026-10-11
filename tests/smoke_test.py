@@ -7,6 +7,12 @@
 
 会用临时目录造样本，覆盖：扫描 / 目录树 / 整理预览（含导出） / 项目雷达 / 查重 / 垃圾 /
 迁移规划 / 迁移执行 / 回滚 / 隔离区还原 / 日志 / Agent 本地意图。
+
+⚠️ **必须对着「工作目录 = 本仓库」的后端跑**（dev 或 `uvicorn backend.main:app`）。
+「保护目录护栏」那 3 项会把样本建在**仓库根**下（`_smoke_protected`），
+断言"项目自身不可写"—— 而**打包版**的"项目自身"是 `release\\Atlas`，
+所以对打包版跑时这 3 项必然失败（不是回归，是环境不同）。
+用 `FILEPILOT_DATA_DIR=<临时目录>` 起测试后端即可，别拿打包好的 Atlas.exe 当靶子。
 """
 from __future__ import annotations
 
@@ -419,8 +425,16 @@ def main() -> int:
         check("认不出时如实转 DeepSeek（不编造）",
               reply3.get("source") == "deepseek" and plan3_none)
     else:
+        # 没配 Key：本地认不出时必须**如实追问**，且不能编造任何可执行动作。
+        #
+        # 这里刻意不校验 source —— 曾经写成 source == "none"，是把 /agent/status 里
+        # 「Key 来源」那个字段混过来了；实际的回复 source 是 "local"（界面显示「本地规则」）。
+        # 而这条断言在本机永远走不到（配了 Key 就走 if 分支），所以一直没被发现。
+        # 真正要守住的是「不编造」：没有可执行动作、给的是追问、没有凭空生出的执行步骤。
         check("认不出时如实说明（不编造）",
-              reply3.get("source") == "none" and plan3_none)
+              plan3_none
+              and reply3.get("type") == "clarify"
+              and not (reply3.get("steps") or []))
 
     if not status.get("configured"):
         print("  [SKIP] DeepSeek 实调 —— 未配置 DEEPSEEK_API_KEY")

@@ -26,12 +26,35 @@ JOB_CANCELLED = "cancelled"
 
 TERMINAL = {JOB_DONE, JOB_FAILED, JOB_CANCELLED}
 
+def reclaimed_bytes(job_type: str, result: dict) -> int:
+    """这次任务实际腾出了多少字节。
+
+    **只认真正动过文件的类型**，而且要显式取字段，不去猜 ——
+    猜错会污染「累计腾出」这个数字，而这个数字是给人信心的，不能虚。
+
+    - `clean`：`freed_size`（文件已移进隔离区）
+    - `migrate`：`total_size`（真搬了才算，dry_run 不算）
+    - 其它（scan / tree / duplicates / junk / similar）：**一律 0**
+      —— 它们只是"看"，没有动过任何文件
+    """
+    if not isinstance(result, dict):
+        return 0
+    if job_type == "clean":
+        return max(0, int(result.get("freed_size") or 0))
+    if job_type == "migrate":
+        if result.get("dry_run"):
+            return 0
+        return max(0, int(result.get("total_size") or 0))
+    return 0
+
+
 JOB_TYPES: dict[str, str] = {
     "scan": "扫描分析",
     "tree": "空间地图",
     "virtual": "整理预览",
     "projects": "项目雷达",
     "duplicate": "重复文件",
+    "similar": "相似图片",
     "junk": "垃圾文件",
     "migrate": "跨盘迁移",
     "clean": "清理",
@@ -347,8 +370,12 @@ class JobManager:
                     job["type"], "成功", job.get("target", ""),
                     job.get("title") or job.get("type_label", ""),
                     job_id=job_id, job_type=job["type"], permission=job.get("permission"),
+                    reclaimed=reclaimed_bytes(job["type"], result),
                 )
-            except JobCancelled:
+            except (JobCancelled, InterruptedError):
+                # InterruptedError 是 fsutil 里统一的"已取消"信号（见 hash_file / copy_file），
+                # 不并进来的话，取消一个大文件查重会被当成普通异常 →
+                # 任务卡显示「执行失败」而不是「已取消」，用户以为出错了。
                 self.update(
                     job_id, status=JOB_CANCELLED, message="已取消",
                     finished_at=fsutil.now_iso(), force=True,
@@ -386,6 +413,12 @@ class JobManager:
 
     # -- 回滚 -------------------------------------------------------------
     def rollback(self, job_id: str) -> dict:
+        """把一个任务的写入动作逐个撤销回去。
+
+        这里同样过权限门禁：门禁只写在 `_launch()` 里的话，只读档下**回滚照样能改文件**
+        （2026-10-08 审计实测），「只读档不写任何东西」这条不变量就破了。
+        """
+        permissions.require_write("回滚任务（会把文件搬回原位）")
         job = self.get(job_id)
         actions = list(job.get("actions") or [])
         restored: list[dict] = []

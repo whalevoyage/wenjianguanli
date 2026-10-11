@@ -59,6 +59,40 @@ def read_logs() -> list[dict]:
     return []
 
 
+def reclaimed_stats() -> dict:
+    """累计腾出：把所有任务日志里记的 reclaimed 加起来。
+
+    ⚠️ 口径要说清：**文件是先进隔离区的，清空隔离区后才真正释放磁盘空间。**
+       所以这个数字叫「已腾出」而不是「已释放」，界面上也会这么写。
+       老日志没有 reclaimed 字段 → 自然算成 0，不会被误计。
+    """
+    from .fsutil import format_size, now_iso
+
+    logs = read_logs()
+    today_prefix = now_iso()[:10]
+    total = 0
+    today = 0
+    count = 0
+    for entry in logs:
+        if entry.get("result") != "成功":
+            continue
+        value = entry.get("reclaimed")
+        if not isinstance(value, (int, float)) or value <= 0:
+            continue
+        total += int(value)
+        count += 1
+        if str(entry.get("time") or "").startswith(today_prefix):
+            today += int(value)
+    return {
+        "total": total,
+        "total_text": format_size(total),
+        "today": today,
+        "today_text": format_size(today),
+        "count": count,
+        "note": "文件先进隔离区，清空隔离区后才真正释放磁盘空间。",
+    }
+
+
 def write_log(kind: str, result: str, path: str = "", note: str = "", **extra: Any) -> dict:
     """写一条审计日志。字段固定为 time/type/result/path/note，其余进 extra。"""
     from .fsutil import now_iso

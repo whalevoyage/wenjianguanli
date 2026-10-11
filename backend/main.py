@@ -11,14 +11,15 @@ from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import config, diagnostics, fsutil, permissions, scheduler, store
 from .jobs import JOB_TYPES, JobContext, manager
 from .services import (
-    agent, agent_task, backup, clean, duplicates, junk, migrate, overview, projects, scan, virtual,
+    agent, agent_task, backup, clean, duplicates, explain, junk, migrate, overview, projects, scan,
+    similar, virtual,
 )
 
 app = FastAPI(title="FilePilot Lite API", version="2.0.0")
@@ -29,7 +30,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
-scheduler.start_runner()
+# 定时任务的后台 runner **暂不启动**。
+# 前端对 schedules 零入口（全仓 grep 无引用），一旦库里被写进记录，就会在用户看不见、
+# 也管不了的地方自动跑任务 —— 2026-10-08 审计发现时库里恰好是 0 条，属于潜伏隐患。
+# 后端模块与三条路由都保留着，要上线这个功能：先给前端接上入口，再把下面这行打开。
+# scheduler.start_runner()
 
 WEB_DIR = config.APP_ROOT / "web"
 
@@ -50,6 +55,18 @@ class TreeRequest(BaseModel):
     path: str
     depth: int = Field(default=config.TREE_DEFAULT_DEPTH, ge=0, le=20)
     excludes: list[str] | None = None
+
+
+class SimilarRequest(BaseModel):
+    path: str
+    excludes: list[str] | None = None
+    threshold: int = Field(default=similar.DEFAULT_THRESHOLD, ge=0, le=32)
+    min_size: int = Field(default=similar.DEFAULT_MIN_SIZE, ge=0)
+
+
+class ExplainRequest(BaseModel):
+    kind: str = "file"
+    item: dict = Field(default_factory=dict)
 
 
 class DuplicateRequest(BaseModel):
@@ -164,9 +181,16 @@ class ScheduleRequest(BaseModel):
 
 
 class AgentPlanRequest(BaseModel):
-    """计划预览：只拆步骤，不创建任务。"""
+    """计划预览：只拆步骤，不创建任务。
+
+    `revise` 非空时是「草稿就地改条件重算」——方案还没变成任务，所以意图必须
+    由前端带回来（`revise.intent`），条件补丁走 `revise.constraints`。
+    `message` 仍必填，但重算分支不读它：保持校验强度，也避免前端在两条路径上
+    传不同形状的请求。
+    """
     message: str = Field(min_length=1, max_length=4000)
     context: dict[str, Any] = Field(default_factory=dict)
+    revise: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentTaskRequest(BaseModel):
@@ -175,11 +199,14 @@ class AgentTaskRequest(BaseModel):
     intent  = plan.intent（统一意图结构）
     params  = plan.params（动作参数）
     steps   = 可省略；省略时由后端按 intent 现拆
+    conversation_id = 这条任务属于哪个对话。只读分析段跑完后要把"用过的目录"
+                      记进**本会话**的最近路径（而不是全局偏好），所以任务侧必须知道它。
     """
     intent: dict[str, Any] = Field(default_factory=dict)
     params: dict[str, Any] = Field(default_factory=dict)
     steps: list[dict[str, Any]] | None = None
     mode: str = "analyze"
+    conversation_id: str = ""
     title: str = ""
 
 
@@ -209,12 +236,12 @@ def _launch(job_type: str, title: str, target: str, params: dict, worker: Callab
             raise HTTPException(status_code=400, detail="当前是「只读」档：只允许扫描、预览与生成计划")
     job = manager.create(job_type, title, target, params)
     manager.start(job["id"], worker)
-    # 用户实际用过的目录记进 Agent 的常用路径（第五阶段）。
-    # 这里是「副作用」，任何异常都不能影响任务本身。
-    try:
-        agent.add_common_path(target)
-    except (OSError, ValueError, TypeError):
-        pass
+    # 这里**刻意不再**把 target 写进全局「常用路径」。
+    # 原来每启动一个任务就写一次，于是你在 A 对话里扫过的目录，会在 B 对话里
+    # 被 Agent 当成"你常用"——正是「每个对话共用一个记忆」。
+    # 现在：
+    #   · Agent 发起的任务 → 由 agent_task._remember_path 记进**本会话**的 recent_paths；
+    #   · 从选项卡直接点起来的任务 → 不属于任何对话，不记。
     return {"job_id": job["id"], "job": manager.get(job["id"])}
 
 
@@ -238,9 +265,14 @@ def get_config():
         "drives": config.drive_letters(),
         "excludes": config.DEFAULT_EXCLUDES,
         "junk_rules": [
-            {"id": rule["id"], "name": rule["name"], "level": rule["level"], "desc": rule["desc"]}
+            {"id": rule["id"], "name": rule["name"], "level": rule["level"], "desc": rule["desc"],
+             "from_user": rule["id"] not in {item["id"] for item in config.JUNK_RULES_BUILTIN}}
             for rule in config.JUNK_RULES
         ],
+        # 用户放的 junk_rules.json 里读不进来的条目：坏在哪、为什么，逐条给出来。
+        # 不暴露的话，用户改错一个字段只会看到「规则没生效」，无从下手。
+        "junk_rule_issues": list(config.JUNK_RULE_ISSUES),
+        "junk_rules_file": str(config.JUNK_RULES_FILE),
         "levels": config.JUNK_LEVEL_META,
         "safety": {
             "protected": [str(path) for path in config.SOFT_PROTECTED_DIRS],
@@ -294,7 +326,7 @@ def stream_job(job_id: str, last_event_id: int = 0):
 @app.post("/api/jobs/{job_id}/cancel")
 def cancel_job(job_id: str, payload: CancelJobRequest | None = None):
     try:
-        job = manager.cancel(job_id)
+        manager.cancel(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="任务不存在")
     # 来源记在任务上，由任务收尾时统一写进审计日志——否则同一条取消会写两遍
@@ -309,6 +341,10 @@ def rollback_job(job_id: str):
         return manager.rollback(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="任务不存在")
+    except (OSError, ValueError) as exc:
+        # 门禁抛的是 BlockedPathError（ValueError 子类）——不接住的话会变成 500，
+        # 一次「友好拒绝」被报成服务端崩溃。
+        raise _friendly(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +478,35 @@ def purge_trash(request: TrashRequest):
 # ---------------------------------------------------------------------------
 # 日志
 # ---------------------------------------------------------------------------
+
+@app.get("/api/stats/reclaimed")
+def get_reclaimed_stats():
+    """累计腾出多少空间 —— 首页/日志页拿它做正反馈。"""
+    return store.reclaimed_stats()
+
+
+@app.post("/api/similar/scan")
+def start_similar_scan(request: SimilarRequest):
+    """找画面相似的图片（只读，不并进「完全重复」）。"""
+    try:
+        root = fsutil.resolve_dir(request.path)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    return _launch("similar", f"相似图片 {root}", str(root), request.model_dump(), similar.run_similar_scan)
+
+
+@app.post("/api/agent/explain")
+def explain_item(request: ExplainRequest):
+    """让模型解释一个待清理项是什么。
+
+    ⚠️ 这是**全项目第二处会联网花 token 的地方**（第一处是 Agent 助手页），
+       只能由用户主动点触发。没配 Key 会如实返回 available=False，不编内容。
+    """
+    try:
+        return explain.explain(request.kind, request.item)
+    except ValueError as exc:
+        raise _friendly(exc)
+
 
 @app.get("/api/logs")
 def get_logs():
@@ -581,8 +646,18 @@ def agent_context():
 
 
 @app.get("/api/agent/prefs")
-def get_agent_prefs():
-    return {"prefs": agent.read_prefs(), "tags": config.EXCLUDE_TAGS}
+def get_agent_prefs(conversation_id: str = ""):
+    """长期偏好 +（可选）本会话的最近路径。
+
+    recent_paths 跟着会话走：只读分析段跑完记的是**这一条对话**用过的目录。
+    它单独返回、不混进 prefs —— prefs 是用户手设的长期设置，两者性质不同。
+    """
+    return {
+        "prefs": agent.read_prefs(),
+        "tags": config.EXCLUDE_TAGS,
+        "recent_paths": (store.get_conversation_state(conversation_id).get("recent_paths") or [])
+        if conversation_id.strip() else [],
+    }
 
 
 @app.post("/api/agent/prefs")
@@ -595,8 +670,19 @@ def update_agent_prefs(request: AgentPrefsRequest):
 
 @app.post("/api/agent/plan")
 def agent_plan(request: AgentPlanRequest):
-    """计划预览：把一句话拆成计划树，**不创建任何任务**。"""
+    """计划预览：把一句话拆成计划树，**不创建任何任务**。
+
+    `revise` 非空时不重新解析那句话，而是把草稿带着的意图按新条件重算——
+    行为与 /api/agent/task/{id}/revise 一致，区别只是这份方案还没建任务。
+    两条路径都零 token，也都不创建任何东西。
+    """
     try:
+        if request.revise:
+            return agent.revise_plan_preview(
+                request.revise.get("intent") or {},
+                request.revise.get("constraints") or {},
+                request.context,
+            )
         return agent.plan_preview(request.message, request.context)
     except (ValueError, TypeError) as exc:
         raise _friendly(exc)
@@ -613,6 +699,7 @@ def start_agent_task(request: AgentTaskRequest):
         "plan_params": request.params or {},
         "steps": request.steps,
         "mode": "analyze",
+        "conversation_id": request.conversation_id or "",
     }
     job = manager.create("agent_task", goal, scope, params)
     manager.start(job["id"], agent_task.run_agent_task)

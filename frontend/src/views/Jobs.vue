@@ -1,9 +1,9 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Operation, Refresh } from '@element-plus/icons-vue'
+import { Operation, Promotion, Refresh } from '@element-plus/icons-vue'
 import EmptyState from '../components/EmptyState.vue'
-import { cancelJob, listJobs, rollbackJob } from '../api/filepilot'
+import { approveAgentTask, cancelJob, listJobs, rollbackJob } from '../api/filepilot'
 import JobProgress from '../components/JobProgress.vue'
 import { formatDateTime, formatShortTime } from '../utils/formatters'
 
@@ -22,7 +22,28 @@ const filtered = computed(() => (
 
 const selected = computed(() => jobs.value.find(job => job.id === selectedId.value) || null)
 
-const runningCount = computed(() => jobs.value.filter(job => ['running', 'pending'].includes(job.status)).length)
+/**
+ * 「进行中」只数真的在跑的；「待确认」单独数 —— 它是**等用户动手**的状态。
+ * 以前只数 running/pending，于是一个停在「等待确认」的任务会让这里写「进行中 0 个」，
+ * 而右边详情还写着「等待确认」：用户会以为任务丢了（2026-10-11 用户报的就是这个）。
+ */
+const activeCount = computed(() => jobs.value.filter(job => ['running', 'pending'].includes(job.status)).length)
+const waitingCount = computed(() => jobs.value.filter(job => job.status === 'waiting').length)
+
+/** 停在「等待你确认」的 Agent 任务 —— 它需要一个「继续执行」的入口。 */
+const canResume = job => Boolean(job) && job.type === 'agent_task' && job.status === 'waiting'
+
+async function resumeAgentTask(job) {
+  if (!job) return
+  try {
+    await approveAgentTask(job.id)
+    await load()
+    selectedId.value = job.id
+    ElMessage.success('已继续执行')
+  } catch (error) {
+    ElMessage.error(error.message)
+  }
+}
 
 async function load(showMessage = false) {
   loading.value = true
@@ -102,7 +123,7 @@ onMounted(() => load())
           <h3 class="panel-title">任务列表</h3>
           <div class="panel-title-actions">
             <span class="panel-count">
-              进行中 {{ runningCount }} 个 · 共 {{ jobs.length }} 条
+              进行中 {{ activeCount }} 个<template v-if="waitingCount"> · 待确认 {{ waitingCount }} 个</template> · 共 {{ jobs.length }} 条
             </span>
             <el-button :icon="Refresh" text circle title="刷新" @click="load(true)" />
           </div>
@@ -152,6 +173,17 @@ onMounted(() => load())
             @cancel="cancelJobById(selected)"
             @rollback="rollbackJobById(selected)"
           />
+
+          <!-- 停在「等确认」的 Agent 任务：这里是它唯一的通用续跑入口。
+               以前只有 Agent 页的计划卡能继续，换个页面就再也推不动了。 -->
+          <div v-if="canResume(selected)" class="job-resume">
+            <el-button type="primary" :icon="Promotion" @click="resumeAgentTask(selected)">
+              继续执行
+            </el-button>
+            <span class="job-resume__hint">
+              这个任务停在等你确认，点「继续执行」进入执行段；删除仍先进隔离区。
+            </span>
+          </div>
 
           <div v-if="selected.params && Object.keys(selected.params).length" class="job-detail-section">
             <div class="job-detail-section__title">参数</div>
@@ -270,6 +302,24 @@ onMounted(() => load())
   font-size: 12.5px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* 待确认的任务：给它一行提示 + 一个主按钮，别让它埋在列表里没人管 */
+.job-resume {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--inset);
+}
+
+.job-resume__hint {
+  color: var(--ink-3);
+  font-size: var(--fs-note);
+  line-height: 1.5;
 }
 
 .job-item__type::before {

@@ -6,7 +6,7 @@ import time
 import uuid
 from datetime import datetime, timedelta
 
-from . import config, database, fsutil
+from . import config, database, permissions
 
 ALLOWED = {"scan", "junk", "duplicate", "backup"}
 
@@ -27,6 +27,8 @@ def remove_schedule(schedule_id: str) -> None:
 def new_schedule(name: str, kind: str, params: dict, interval_minutes: int, next_run_at: str | None = None) -> dict:
     if kind not in ALLOWED:
         raise ValueError(f"不支持的定时任务类型：{kind}")
+    # 定时任务是「埋一个以后会自动执行的写操作」（backup 会写盘），只读档下必须能拒。
+    permissions.require_write(f"新建定时任务（{kind}）")
     if not next_run_at:
         next_run_at = (datetime.now().astimezone() + timedelta(minutes=interval_minutes)).isoformat(timespec="seconds")
     return save_schedule({"id": uuid.uuid4().hex[:12], "name": name, "kind": kind, "params": params, "enabled": True, "interval_minutes": interval_minutes, "next_run_at": next_run_at, "last_run_at": None, "last_job_id": None, "error": None})
@@ -50,6 +52,9 @@ def _run_due() -> None:
     from .jobs import manager
     from .services import backup, duplicates, junk, scan
     workers = {"scan": scan.run_scan, "junk": junk.run_junk_scan, "duplicate": duplicates.run_duplicate_scan, "backup": backup.run_backup}
+    # 只读档 = 用户明确要求「现在什么都别动」，后台自动化同样要让路。
+    if permissions.current() == "readonly":
+        return
     now = datetime.now().astimezone()
     for item in list_schedules():
         if not item["enabled"] or item["kind"] not in workers:

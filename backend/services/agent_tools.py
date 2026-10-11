@@ -13,7 +13,6 @@
 """
 from __future__ import annotations
 
-import fnmatch
 import os
 import time
 from collections import defaultdict
@@ -24,6 +23,10 @@ from .. import config, fsutil, permissions, store
 # ---------------------------------------------------------------------------
 # 一、动作白名单（执行工具 / 导航 / 状态页）
 # ---------------------------------------------------------------------------
+
+# 垃圾规则 + 预编译正则，与 junk 服务共用 config 里那张表（见 config.junk_matchers）。
+# 跳过集合与 junk 服务略有不同：这里零字节另有单独分支处理。
+_JUNK_MATCHERS = config.junk_matchers(frozenset({"empty_dir", "huge_file", "browser_cache"}))
 
 ALLOWED_ACTIONS = [
     "open_tab", "overview", "scan", "tree", "virtual_preview", "projects_scan",
@@ -52,7 +55,9 @@ TOOL_REGISTRY = {
     "migrate_execute": {"label": "执行跨盘迁移", "kind": "job", "group": "execute", "write": True},
     "backup": {"label": "创建项目备份", "kind": "job", "group": "execute", "write": True},
     "trash_restore": {"label": "恢复隔离区文件", "kind": "job", "group": "execute", "write": True},
-    "job_cancel": {"label": "取消任务", "kind": "job", "group": "execute", "write": True},
+    # job_cancel 不算写：它只是让一个任务停下来，不碰任何文件（只读档也该能停掉跑疯的任务）。
+    # 这里必须与 WRITE_ACTIONS 保持一致 —— 前端按 WRITE_ACTIONS 判定，两处打架会误导后来人。
+    "job_cancel": {"label": "取消任务", "kind": "job", "group": "execute", "write": False},
     "job_rollback": {"label": "回滚任务", "kind": "job", "group": "execute", "write": True},
 }
 
@@ -305,7 +310,7 @@ def query_recent_files(path: str, days: int = 7, limit: int = 50, excludes: list
     hit.sort(reverse=True)
     rows = [
         {"path": str(item[1]), "name": item[1].name,
-         "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(item[0])),
+         "modified": fsutil.format_mtime(item[0]),
          "size": item[2], "size_text": fsutil.format_size(item[2])}
         for item in hit[: max(1, min(limit, 200))]
     ]
@@ -405,10 +410,8 @@ def query_junk_files(path: str, limit: int = 50, excludes: list[str] | None = No
     for path_obj in files:
         name = path_obj.name.lower()
         matched = None
-        for rule in config.JUNK_RULES:
-            if rule["id"] in {"empty_dir", "huge_file", "browser_cache"}:
-                continue
-            if any(fnmatch.fnmatch(name, pattern.lower()) for pattern in rule.get("patterns") or []):
+        for rule, matcher in _JUNK_MATCHERS:
+            if matcher is not None and matcher.match(name):
                 matched = rule
                 break
         stat = _stat_of(path_obj)
@@ -452,7 +455,9 @@ def query_project_dirs(path: str, max_depth: int = 3, excludes: list[str] | None
 
     depth = max(1, min(max_depth, 6))
     found: list[dict] = []
-    root_depth = len(root.resolve().parts)
+    # 深度用「相对 root 数分隔符」算 —— 逐目录 resolve() 是每目录一次系统调用
+    root_str = str(root).rstrip("\\/")
+    base_len = len(root_str)
     truncated = False
     deadline = time.monotonic() + config.AGENT_QUERY_MAX_SECONDS
 
@@ -462,11 +467,11 @@ def query_project_dirs(path: str, max_depth: int = 3, excludes: list[str] | None
                 truncated = True
                 break
             current_path = Path(current)
-            current_depth = len(current_path.resolve().parts) - root_depth
+            current_depth = current[base_len:].count(os.sep) if len(current) > base_len else 0
             if current_depth >= depth:
                 subdirs[:] = []
                 continue
-            subdirs[:] = [name for name in subdirs if not fsutil.is_blocked(current_path / name)]
+            subdirs[:] = [name for name in subdirs if not fsutil.is_self_protected(current_path / name)]
             marker = config.project_marker_for(filenames)
             if marker:
                 found.append({"path": str(current_path), "name": current_path.name, "marker": marker})
@@ -542,7 +547,7 @@ def check_path_protected(path: str, mode: str | None = None) -> dict:
     current = mode or permissions.current()
     target = Path(str(path).strip().strip('"'))
     reason = fsutil.write_block_reason(target, current)
-    readable = not bool(fsutil.is_blocked(target))
+    readable = not bool(fsutil.is_self_protected(target))
     return _result(
         {"path": str(target), "mode": current, "writable": reason is None,
          "reason": reason, "readable": readable},

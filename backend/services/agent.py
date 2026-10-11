@@ -9,20 +9,16 @@
 from __future__ import annotations
 
 import json
-import fnmatch
 import os
 import re
-import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 from .. import config, database, fsutil, permissions, secrets, store
 from .agent_intent import (
     SPACE_INTENT_RE,
     canonical,
     clarify_questions,
-    extract_exclude_tags,
     intent_view,
     normalize,
     resolve_action_reference,
@@ -38,7 +34,6 @@ from .agent_tools import (
     TOOL_REGISTRY,
     WRITE_ACTIONS,
     registry_view,
-    run_tool,
 )
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
@@ -235,11 +230,31 @@ def _conversation_id(context: dict | None) -> str:
 MEMORY_KEEP = 400
 
 
-def save_memory(conversation_id: str, role: str, content: str) -> None:
+# 落进对话记忆的字段白名单：只留「重建这条回复长什么样」需要的东西。
+# 存整份 payload 会把状态快照、磁盘列表这类一次性数据也冻进历史——
+# 那些数字第二天就是错的，还原出来反倒是误导。
+MEMORY_PAYLOAD_KEYS = (
+    "type", "source", "tokens",
+    "plan", "intent", "steps", "needs_path", "hint",
+    "question", "missing", "suggestions", "options", "fields",
+)
+
+
+def _memory_payload(payload: dict | None) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        key: payload[key] for key in MEMORY_PAYLOAD_KEYS
+        if payload.get(key) not in (None, "", [], {})
+    }
+
+
+def save_memory(conversation_id: str, role: str, content: str, payload: dict | None = None) -> None:
     if role not in {"user", "assistant", "system"} or not content:
         return
     database.append_memory(
-        config.DATABASE_FILE, conversation_id, role, content[:8000], fsutil.now_iso(), limit=MEMORY_KEEP
+        config.DATABASE_FILE, conversation_id, role, content[:8000], fsutil.now_iso(),
+        limit=MEMORY_KEEP, payload=_memory_payload(payload),
     )
 
 
@@ -336,24 +351,11 @@ def _clean_list(value, limit: int, max_length: int) -> list:
     return result
 
 
-def add_common_path(path: str, note: str = "") -> None:
-    """把用户真的用过的目录记进常用路径——用得越多，Agent 越不用问。"""
-    path = (path or "").strip()
-    # 盘符根（C:\）没有记忆价值，反而会挤掉真正的常用目录
-    if not path or len(path) <= 3:
-        return
-    try:
-        if Path(path).parent == Path(path):
-            return
-    except (OSError, ValueError):
-        return
-    prefs = store.read_prefs()
-    items = [item for item in prefs.get("common_paths") or []
-             if (item.get("path") if isinstance(item, dict) else item) != path]
-    items.insert(0, {"path": path, "note": note[:40]})
-    prefs["common_paths"] = items[:40]
-    prefs["updated_at"] = fsutil.now_iso()
-    store.save_prefs(prefs)
+# add_common_path 已移除（2026-10-08）：
+# 它把"用过的目录"写进全局 prefs.common_paths，是所有对话共用一份记忆的来源。
+# 现在自动记录改走 agent_task._remember_path → 会话状态里的 recent_paths；
+# 全局 prefs.common_paths 不再被任何代码写入（界面也没有手动添加入口）。
+# 字段本身留着不影响什么，清空偏好时前端仍会带上它。
 
 
 def add_clean_strategy(action: str, path: str, message: str) -> None:
@@ -483,7 +485,10 @@ def _runtime_context(conversation_id: str, context: dict | None = None) -> dict:
     return {
         **context,
         "conversation_id": conversation_id,
-        "prefs": prefs,
+        # 喂给模型的 prefs 去掉 common_paths：那是"逛过哪些目录"的使用痕迹，
+        # 带上它等于让模型跨对话记住路径。本会话用过的目录在下面的 state 里，
+        # 那是跟着会话走的，模型照样能用来消解「就刚才那个目录」。
+        "prefs": {k: v for k, v in prefs.items() if k != "common_paths"},
         "state": state,
         "excludes": merged,
         "status": status_context(),
@@ -731,6 +736,50 @@ def plan_preview(message: str, context: dict | None = None) -> dict:
         "clarify": question,
         "needs_path": plan.get("needs_path", False),
         "hint": "预览不创建任务；确认后才会真正开始。",
+    }
+
+
+def revise_plan_preview(intent: dict, patch: dict, context: dict | None = None) -> dict:
+    """草稿阶段的「修改方案」：方案还没变成任务，意图由前端带回来重算。
+
+    与 `revise_task()` 的分工：那个针对已经挂起在 `waiting` 的任务，这个针对
+    还没点「开始分析」的草稿。共同点是**零 token、零副作用**——不建任务、
+    不落记忆、不调模型，只把同一份意图按新条件重新摊一遍。
+
+    runtime 刻意与 `revise_task()` 保持逐字一致（只给 prefs 与 revise 两个键）。
+    两处若喂不同的上下文，同一个补丁会算出不同的约束——用户会看到「任务里的
+    修改方案」和「草稿里的修改方案」给出不一样的结果，这比不支持就地编辑更糟。
+    补丁也只在服务端注入：`_runtime_context()` 会主动 pop 掉上下文里的 revise，
+    否则一次普通对话就能伪造条件绕过模型侧「不许改排除项」的限制。
+
+    不带 `clarify`：草稿已经把计划树渲染出来了，重算只换条件不产生澄清卡，
+    凭空造一句追问反而是误导。
+    """
+    from . import agent_planner
+
+    base = dict(intent or {})
+    if not base.get("action"):
+        raise ValueError("这份方案没有可修改的意图")
+
+    clean = sanitize_constraints(patch or {})
+    if not clean:
+        raise ValueError("没有需要修改的条件")
+
+    runtime = {"prefs": store.read_prefs(), "revise": clean}
+    plan = normalize(revise_payload(base, clean), "", runtime)
+    if plan.get("action") == "none":
+        raise ValueError("按新条件算下来没有可执行的方案了")
+
+    return {
+        "tokens": 0,
+        "revised": True,
+        "message": plan.get("reason") or plan.get("goal") or "已按新条件重算",
+        "plan": plan,
+        "intent": intent_view(plan.get("intent") or {}),
+        "steps": agent_planner.plan_steps(plan),
+        "pipeline": agent_planner.pick_pipeline(plan) or "single",
+        "needs_path": bool(plan.get("missing")),
+        "hint": "只换了条件重算，仍然是只读预览；确认后才会真正开始。",
     }
 
 
@@ -1100,13 +1149,18 @@ def parse_local(message: str, context: dict | None = None) -> dict | None:
     return None
 
 
+# 垃圾规则 + 预编译正则（与 junk 服务共用 config 里那张表）。
+# 这里不跳过任何规则：不靠模式匹配的几条（空目录/零字节/超大）本来就没有 pattern，
+# matcher 为 None，行为与原来"遍历 0 个模式、`any()` 恒 False"一致。
+_JUNK_MATCHERS = config.junk_matchers()
+
+
 def _rule_explanation(path_text: str) -> dict:
     """Explain junk classification locally without reading or modifying the file."""
     path = path_text.strip().strip('"')
     name = os.path.basename(path).lower()
-    for rule in config.JUNK_RULES:
-        patterns = rule.get("patterns") or []
-        if any(fnmatch.fnmatch(name, pattern.lower()) for pattern in patterns):
+    for rule, matcher in _JUNK_MATCHERS:
+        if matcher is not None and matcher.match(name):
             return {
                 "rule_id": rule["id"],
                 "rule_name": rule["name"],
@@ -1150,9 +1204,15 @@ def fallback_clarify(message: str) -> dict:
 
     第四阶段的硬要求——没识别清楚就主动问，不要猜。
     带路径的就把动作选项摆出来；不带路径的先问要处理哪里。
+
+    **必须带上 `plan.action == "none"`**：三条调用路径（本地+无 Key、流式、兜底）
+    都直接返回这个 dict，不走 `none_payload`。少了这个标记，"认不出"这件事在数据里
+    就是缺失的 —— 前端只能靠「plan 不存在」去猜，接口契约也不自洽。
+    这里补上，三条路一次对齐。source 仍是 local（界面要显示「本地规则」）。
     """
     paths = _extract_paths(message)
     options = _fallback_options(paths[0] if paths else "")
+    none_plan = {"action": "none", "reason": ""}
 
     if paths:
         return {
@@ -1165,6 +1225,7 @@ def fallback_clarify(message: str) -> dict:
             "suggestions": [],
             "options": options,
             "fields": [],
+            "plan": dict(none_plan),
         }
 
     return {
@@ -1179,6 +1240,7 @@ def fallback_clarify(message: str) -> dict:
         "fields": [
             {"id": "path", "question": "要处理的目录（也可以直接打一个盘符，如 D:\\）", "kind": "path"},
         ],
+        "plan": dict(none_plan),
     }
 
 
@@ -1387,7 +1449,7 @@ def chat(message: str, context: dict | None = None) -> dict:
 
     def finish(payload: dict) -> dict:
         payload = {**payload, "conversation_id": conversation_id, "memory_count": len(load_memory(conversation_id))}
-        save_memory(conversation_id, "assistant", payload.get("message") or json.dumps(payload, ensure_ascii=False))
+        save_memory(conversation_id, "assistant", payload.get("message") or json.dumps(payload, ensure_ascii=False), payload=payload)
         return payload
 
     query = query_local(text, context)
@@ -1426,7 +1488,13 @@ def chat(message: str, context: dict | None = None) -> dict:
 # 流式对话：边生成边显示，最后仍落回同一个「计划」契约
 # ---------------------------------------------------------------------------
 
-def _chunks(text: str, size: int = 3):
+def _chunks(text: str, size: int = 24):
+    """把一段说明拆成几帧推给前端。
+
+    **刻意不加 sleep**：以前是每 3 个字符睡 15ms，一条 200 字的追问要硬等 1 秒 ——
+    而本地规则算出这句话只要 18ms。界面本来就是逐帧渲染 delta，
+    拆帧只是让前端少拼一次长字符串，不该是节流阀。
+    """
     for index in range(0, len(text), size):
         yield text[index:index + size]
 
@@ -1588,7 +1656,7 @@ def stream_chat(message: str, context: dict | None = None):
 
     def finalize(payload: dict) -> dict:
         """把助手回复落库，并回带会话 id 与记忆条数——所有分支统一走这里，避免漏存。"""
-        save_memory(conversation_id, "assistant", payload.get("message") or json.dumps(payload, ensure_ascii=False))
+        save_memory(conversation_id, "assistant", payload.get("message") or json.dumps(payload, ensure_ascii=False), payload=payload)
         return {**payload, "conversation_id": conversation_id, "memory_count": len(load_memory(conversation_id))}
 
     query = query_local(text, context)
@@ -1602,7 +1670,6 @@ def stream_chat(message: str, context: dict | None = None):
         yield {"type": "phase", "text": "命中本地规则"}
         for piece in _chunks(local.get("reason") or local.get("question") or ""):
             yield {"type": "delta", "text": piece}
-            time.sleep(0.015)
         payload = _local_payload(local, text, context)
         if payload.get("plan"):
             _remember_intent(conversation_id, payload["plan"], text)
@@ -1613,7 +1680,6 @@ def stream_chat(message: str, context: dict | None = None):
         payload = fallback_clarify(text)
         for piece in _chunks(payload["message"]):
             yield {"type": "delta", "text": piece}
-            time.sleep(0.015)
         yield {"type": "done", "payload": finalize(payload)}
         return
 

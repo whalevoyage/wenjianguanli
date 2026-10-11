@@ -13,9 +13,10 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
-from .. import config, fsutil
-from . import agent_intent, agent_planner, agent_tools
+from .. import config, fsutil, store
+from . import agent_intent, agent_planner
 from .agent_tools import run_tool
 
 # 每个子步骤最多占用整条流水线的进度比例由步骤数均分
@@ -152,7 +153,6 @@ def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: l
     constraints = intent.get("constraints") or {}
     scope = (intent.get("scope") or {}).get("path") or ""
     target = (intent.get("scope") or {}).get("target") or ""
-    params = intent.get("params") or {}
     items = items or []
 
     if kind == "query":
@@ -227,16 +227,41 @@ def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: l
 # 主流程
 # ---------------------------------------------------------------------------
 
-def _remember_path(intent: dict) -> None:
-    """只读分析段跑完 = 用户确实在用这个目录，记进常用路径。
+RECENT_PATHS_KEEP = 8
 
-    这一步失败绝不能影响主任务——偏好记忆只是锦上添花。
+
+def _remember_path(intent: dict, conversation_id: str = "") -> None:
+    """只读分析段跑完 = 用户确实在用这个目录，记进**本会话**的最近路径。
+
+    刻意**不写全局 prefs**：那是"随手攒出来的使用痕迹"，写全局会让新对话
+    "记得"你在别的对话里逛过哪些目录 —— 也就是「每个对话共用一个记忆」。
+    用户手设的常用路径（偏好面板里加的）仍然留在全局 prefs 里，那是设置不是痕迹。
+
+    这一步失败绝不能影响主任务——记忆只是锦上添花。
     """
+    cid = (conversation_id or "").strip()
+    if not cid:
+        return
+    scope = str((intent.get("scope") or {}).get("path") or "").strip()
+    # 盘符根没有记忆价值，反而会挤掉真正用到的目录（与 agent.add_common_path 同一条规则）
+    if not scope or len(scope) <= 3:
+        return
     try:
-        from . import agent
+        if Path(scope).parent == Path(scope):
+            return
+    except (OSError, ValueError):
+        return
 
-        scope = (intent.get("scope") or {}).get("path") or ""
-        agent.add_common_path(scope, (intent.get("goal") or "")[:40])
+    try:
+        state = store.get_conversation_state(cid)
+        items = [item for item in (state.get("recent_paths") or [])
+                 if isinstance(item, dict) and item.get("path") != scope]
+        items.insert(0, {
+            "path": scope,
+            "note": (intent.get("goal") or "")[:40],
+            "at": fsutil.now_iso(),
+        })
+        store.save_conversation_state(cid, {"recent_paths": items[:RECENT_PATHS_KEEP]})
     except (OSError, ValueError):
         pass
 
@@ -324,7 +349,7 @@ def run_agent_task(ctx) -> dict:
             })
             # 回填「套用约束」与「汇总方案」两步的真实结论
             _backfill(step_results, steps, proposal, intent)
-            _remember_path(intent)
+            _remember_path(intent, params.get("conversation_id") or "")
             ctx._manager.update(
                 ctx.job_id,
                 steps=steps, step_index=index, proposal=proposal,

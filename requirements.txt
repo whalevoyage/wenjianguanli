@@ -1,3 +1,6 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2.0
+# 打包后用它开原生窗口（Windows 走 WebView2）。源码运行不装也行 ——
+# packaging/launcher.py 检测不到就自动退回浏览器，功能不受影响。
+pywebview>=6.0,<7

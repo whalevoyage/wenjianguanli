@@ -6,6 +6,64 @@ Atlas 将“看清磁盘 → 生成预览 → 用户确认 → 执行 → 校验
 
 > 除 Agent 的模型问答外，文件扫描、分析、清理、迁移、备份和日志都在本机完成，不需要账号密码。
 
+## 快速开始
+
+### 普通用户：解压即用（推荐）
+
+1. 下载 `Atlas-2.0.0-win64-portable.zip` 并解压到任意位置（比如 `D:\Atlas`）
+2. 双击 `Atlas\Atlas.exe`
+3. 程序**自动打开浏览器**进入界面。不会弹控制台窗口。
+
+不需要安装 Python、Node 或任何运行时。程序只监听 `127.0.0.1`，数据存在
+`%LOCALAPPDATA%\Atlas`，卸载就是删掉那个文件夹（外加删掉数据目录）。
+
+**重复双击不会开第二个实例** —— 已经在跑时直接把浏览器指过去。
+**端口 8000 被占用时会自动换一个空闲端口**，实际地址写在日志里。
+
+出问题了看 `%LOCALAPPDATA%\Atlas\atlas.log`（每次启动与失败原因都在里面）。
+
+### 普通用户：安装包
+
+`packaging/Atlas.iss` 是 Inno Setup 脚本，按用户安装到 `%LOCALAPPDATA%\Atlas`，
+**不需要管理员权限**。需要装 Inno Setup 6 之后自己编译：
+
+```powershell
+.\packaging\build_release.ps1
+& "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" .\release\Atlas.iss
+```
+
+### 从源码跑（开发者）
+
+```powershell
+# 后端（默认监听 8000）
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\python -m uvicorn backend.main:app --port 8000
+
+# 前端（另开一个终端）
+cd frontend
+npm install
+npm run dev          # 5173；默认直接调 http://127.0.0.1:8000/api（vite 里没有配代理）
+```
+
+后端端口不是 8000 时，用 `VITE_API_BASE_URL=http://127.0.0.1:<端口>/api` 覆盖。
+
+或者用打包后的启动器（会自动开浏览器、自动换端口）：
+
+```powershell
+python packaging\launcher.py
+```
+
+出包的完整说明见 `packaging/README.md`。
+
+### Agent 的模型问答（可选）
+
+除 Agent 以外，扫描、查重、清理、迁移、备份、日志**全部本地完成，零联网、零 token**。
+
+要用 Agent 的自然语言理解，需要配置一个模型 API Key —— 入口在 **Agent 页里**。
+Key 存在本机，用 Windows DPAPI 加密（不是明文），接口只回掩码、不回传完整 Key。
+不配也能用：Agent 会退回本地规则。
+
 ## 为什么做 Atlas
 
 文件越来越多，传统文件管理器却仍主要停留在“打开、复制、删除”层面。真正让人困扰的，往往是下面这些问题：

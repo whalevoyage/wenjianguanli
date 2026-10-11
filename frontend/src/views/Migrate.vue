@@ -5,6 +5,8 @@ import { Coin, Files, Lock, PieChart, Sort, Warning } from '@element-plus/icons-
 import { startMigrate } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
+import { useHandoffTarget } from '../composables/useHandoff'
+import HandoffNote from '../components/HandoffNote.vue'
 import DataTable from '../components/DataTable.vue'
 import JobProgress from '../components/JobProgress.vue'
 import StatCard from '../components/StatCard.vue'
@@ -16,6 +18,8 @@ const plan = useJob('migrate.plan')
 const execute = useJob('migrate.execute')
 
 const source = ref('')
+/* 跨页接力：从别的页面带着目录过来时，直接填好这个框（不自动开跑） */
+const { handed, from } = useHandoffTarget(source)
 const target = ref('')
 const mode = ref('move')
 const createJunction = ref(false)
@@ -124,6 +128,8 @@ onMounted(async () => {
   <div class="section-stack form-page">
 
     <section class="app-card panel-card">
+      <HandoffNote v-if="handed" :path="handed" :from="from" @dismiss="handed = ''" />
+
       <TargetPicker
         v-model:path="source"
         v-model:excludes="excludes"

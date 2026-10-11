@@ -33,9 +33,11 @@ import {
   getRecipes,
   getTrash,
   listAgentConversations,
+  listJobs,
   observeAgentJob,
   renameAgentConversation,
   restoreTrash,
+  reviseAgentPlan,
   reviseAgentTask,
   rollbackJob,
   saveAgentPrefs,
@@ -63,7 +65,7 @@ import { renderMarkdown } from '../utils/miniMarkdown'
 import { formatShortTime } from '../utils/formatters'
 
 const { config, excludes, load: loadConfig } = useConfig()
-const job = useJob('agent')
+const job = useJob(() => conversationId.value)
 const router = useRouter()
 
 const status = ref(null)
@@ -162,11 +164,12 @@ const contextChips = computed(() => {
   if (!ctx) return []
   const chips = []
   if (ctx.running_count) {
-    chips.push({ id: 'running', text: `${ctx.running_count} 个任务在跑`, tone: 'active' })
+    // 「在跑」是陈述不是请求，用中性灰；只有「待确认」才配拿主色催你
+    chips.push({ id: 'running', text: `${ctx.running_count} 个任务在跑`, tone: 'quiet' })
   } else {
     chips.push({ id: 'idle', text: '空闲', tone: 'quiet' })
   }
-  if (ctx.waiting_count) chips.push({ id: 'waiting', text: `${ctx.waiting_count} 个待确认`, tone: 'warn' })
+  if (ctx.waiting_count) chips.push({ id: 'waiting', text: `${ctx.waiting_count} 个待确认`, tone: 'active' })
   if (ctx.rollback_count) chips.push({ id: 'rollback', text: `${ctx.rollback_count} 个可回滚`, tone: 'quiet' })
   const tight = (ctx.disks || []).filter(disk => disk.level !== 'ok').slice(0, 2)
   for (const disk of tight) {
@@ -184,16 +187,37 @@ const prefsPop = ref(null)
 const prefsSaving = ref(false)
 const newExcludePath = ref('')
 const newHardRule = ref('')
+/* 本会话「用过的目录」——自动记的，跟着会话走，不写全局偏好。
+   与 prefs.common_paths（用户手设的长期常用路径）性质不同，展示时合并、来源分开。 */
+const recentPaths = ref([])
 
 async function loadPrefs() {
   try {
-    const data = await getAgentPrefs()
+    const data = await getAgentPrefs(conversationId.value)
     prefs.value = data.prefs || null
     excludeTags.value = data.tags || {}
+    recentPaths.value = data.recent_paths || []
   } catch {
     prefs.value = null
+    recentPaths.value = []
   }
 }
+
+/* 展示用的路径清单：本会话用过的排前面，再接全局手设的，按路径去重。
+   这样"这个对话去过哪"和"我长期设了哪些"合起来看，但不会互相冒充。 */
+const knownPaths = computed(() => {
+  const seen = new Set()
+  const out = []
+  const push = (path, note, session) => {
+    const p = typeof path === 'string' ? path : (path?.path || '')
+    if (!p || seen.has(p)) return
+    seen.add(p)
+    out.push({ path: p, note: note || '', session })
+  }
+  for (const item of recentPaths.value || []) push(item, item?.note, true)
+  for (const item of prefs.value?.common_paths || []) push(item, item?.note, false)
+  return out
+})
 
 const tagOptions = computed(() =>
   Object.entries(excludeTags.value).map(([name, spec]) => ({ name, note: spec.note || '' })),
@@ -277,11 +301,13 @@ let stopStream = null
 /* 示例胶囊：只留 4 句、正好排满一行。
    6 句会断成「5 + 1」（最后一句孤零零占第二行），既不协调又占掉两行高度。
    删掉的是最长的迁移示例与语义重复的那句——迁移在侧栏「跨盘迁移」里能进。 */
-const EXAMPLES = [
-  '清理 C 盘垃圾',
-  '找出 D 盘重复文件并只留最新',
-  '扫描 D 盘',
-  '备份 D:\\资料 到 E:\\备份',
+/* 空态的四个入口。给「第一次进来不知道该干什么」一个具体起点，
+   note 写的是**点下去会发生什么**，不是宣传语 —— 后面那句"只读"要让用户先看到。 */
+const HERO_ACTIONS = [
+  { label: '清理垃圾', note: '按安全级分档，先进隔离区', prompt: '清理 C 盘垃圾' },
+  { label: '找重复文件', note: '按内容分组，每组只留一份', prompt: '找出 D 盘重复文件并只留最新' },
+  { label: '看看磁盘占用', note: '只读扫描，不删任何东西', prompt: '扫描 D 盘' },
+  { label: '备份目录', note: '打成 ZIP，跳过依赖与构建产物', prompt: '备份 D:\\资料 到 E:\\备份' },
 ]
 
 const driveRoots = computed(() => (config.value?.drives || []).map(letter => `${letter}:\\`))
@@ -308,6 +334,9 @@ const jobSummary = computed(() => {
 
 const jobIsAgentTask = computed(() => job.job.value?.type === 'agent_task')
 const treeOpen = ref(true)
+
+/** 正在重算的是哪一条草稿（-1 表示没有）。草稿还没建任务，重算走 /agent/plan。 */
+const draftRevising = ref(-1)
 const treeSteps = computed(() => job.job.value?.steps || [])
 const treeProposal = computed(() => job.job.value?.proposal || {})
 const treeIntent = computed(() => job.job.value?.intent || {})
@@ -334,10 +363,63 @@ function toggleTreeOpen() {
   treeOpen.value = !treeOpen.value
 }
 
+/**
+ * 找后端「正在跑的 Agent 任务」，并带出它属于哪个对话。
+ *
+ * 为什么要查后端、而不是只看本会话的 `jobRunning`：
+ * 任务卡按会话显示，但**「一次只跑一个 Agent 任务」是全局限制** ——
+ * 只看本会话的话，切个会话就能再起一个，限制等于没有。
+ * 走 `/jobs` 还能查到**不是本页启动**的任务（比如刷新过页面），
+ * 并且能拿到它的 `params.conversation_id`，把警告说清楚是谁在跑。
+ */
+/**
+ * 认领「本会话停在等待确认的 Agent 任务」。
+ *
+ * `useJob` 的 `ACTIVE_JOBS` 只是内存里的一个 Map —— **刷新页面 / 重开窗口就空了**。
+ * 而一个停在 `waiting` 的任务在后端还活着，前端却再也接不回来：
+ * 表现就是「任务从界面上消失了，也没法点继续」（2026-10-11 用户报的）。
+ * 所以槽位为空时主动问一次后端：本会话有没有 waiting 的 agent_task，有就接回来。
+ */
+async function adoptWaitingTask() {
+  if (job.job.value) return // 手上已经有任务了，别抢
+  const cid = conversationId.value
+  if (!cid) return
+  try {
+    const data = await listJobs(50)
+    const hit = (data?.jobs || []).find(item => item.type === 'agent_task'
+      && item.status === 'waiting'
+      && (item.params?.conversation_id || '') === cid)
+    if (hit) job.watch(hit.id)
+  } catch {
+    /* 后端没起来就算了，别拦着页面 */
+  }
+}
+
+async function findRunningAgentTask() {
+  try {
+    const data = await listJobs(50)
+    const list = data?.jobs || []
+    const hit = list.find(item => item.type === 'agent_task'
+      && ['pending', 'running', 'waiting'].includes(item.status))
+    if (!hit) return null
+    const cid = hit.params?.conversation_id || ''
+    const conv = conversations.value.find(item => item.conversation_id === cid)
+    // 会话标题就是用户那条原话，可能是整段路径 —— 提示里只留一截，够认出来就行
+    const raw = (conv?.title || '').trim()
+    const name = raw ? (raw.length > 16 ? `${raw.slice(0, 16)}…` : raw) : '另一个对话'
+    return { name, conversationId: cid, isCurrent: cid === conversationId.value }
+  } catch {
+    return null // 查不到就别拦着用户
+  }
+}
+
 /** 启动多步骤任务：先只跑只读分析段 */
 async function startPlanTree(msg) {
-  if (jobRunning.value) {
-    ElMessage.warning('有任务正在运行，等它结束再下新计划')
+  const busy = await findRunningAgentTask()
+  if (busy) {
+    ElMessage.warning(busy.isCurrent
+      ? '本对话有任务正在运行，等它结束再下新计划'
+      : `「${busy.name}」里有个任务正在运行，等它结束再下新计划`)
     return
   }
   const plan = msg.plan || {}
@@ -346,6 +428,9 @@ async function startPlanTree(msg) {
     params: plan.params || {},
     steps: stepsOf(msg),
     title: plan.goal || plan.label || 'Agent 任务',
+    // 带上会话 id：后端要把「用过的目录」记进本会话的最近路径，
+    // 而不是全局偏好 —— 否则新对话会"记得"别的对话逛过哪儿。
+    conversation_id: conversationId.value,
   }))
   loadAgentContext()
 }
@@ -388,6 +473,39 @@ async function approveSafeOnly() {
 
 /** 修改方案（就地改条件）：换条件重算，零 token，仍在同一个任务里。 */
 const reviseBusy = ref(false)
+
+/** 草稿就地改条件：方案还没建任务，所以走 /agent/plan 的重算分支，零 token。
+    只替换方案本身，保留这条消息原本的来源与 token 数——重算没花 token，
+    但原话那次花过，抹掉就看不出这条一共花了多少。 */
+async function reviseDraft(index, patch) {
+  const msg = messages.value[index]
+  // 必须用 plan.intent（完整意图）：消息上的 msg.intent 是 intent_view 的精简视图，
+  // 它不含 action，拿去重算会被后端判成「没有可修改的意图」。
+  const intent = msg?.plan?.intent
+  if (!intent?.action) {
+    modifyPlan()
+    return
+  }
+  draftRevising.value = index
+  try {
+    const message = [...messages.value.slice(0, index)]
+      .reverse()
+      .find(item => item.role === 'user')?.text || ''
+    const data = await reviseAgentPlan(message, intent, patch)
+    Object.assign(msg, {
+      plan: data.plan,
+      intent: data.intent,
+      steps: data.steps || [],
+      message: data.message || msg.message,
+      revised: true,
+    })
+    ElMessage.success('已按新条件重算，仍然是只读预览')
+  } catch (error) {
+    ElMessage.error(error.message)
+  } finally {
+    draftRevising.value = -1
+  }
+}
 
 async function revisePlan(patch) {
   const current = job.job.value
@@ -756,6 +874,10 @@ function newConversation() {
   conversationId.value = id
   persistConversation(id)
   resetView()
+  // 新对话是空槽位：把上一个对话的任务卡清掉（任务本身照旧在后台跑）
+  job.restore()
+  // 新对话没有任何"用过的目录"：重新拉一次，把上一个会话的最近路径换掉
+  loadPrefs()
   nextTick(() => composerInput.value?.focus?.())
 }
 
@@ -765,6 +887,13 @@ async function switchConversation(id) {
   conversationId.value = id
   persistConversation(id)
   resetView()
+  /* 任务卡跟着会话走：切过去就把那个会话的任务接回来；没有就清掉 ——
+     别让上一个对话的任务留在屏幕上（2026-10-09 用户报的就是这个）。
+     注意 `job` 的槽位是 `() => conversationId.value`，所以这一行必须在改完 id 之后。 */
+  job.restore()
+  adoptWaitingTask()
+  // 最近路径跟着会话走，切换后必须重新拉，否则显示的还是上一个对话的
+  loadPrefs()
   await loadConversationMemory()
 }
 
@@ -789,20 +918,32 @@ async function restoreConversation() {
     const items = data?.messages || []
     memoryCount.value = items.length
     if (!items.length) return
-    messages.value = items.map(item =>
-      item.role === 'user'
-        ? { role: 'user', text: item.content }
-        : {
-            role: 'assistant',
-            source: '',
-            tokens: 0,
-            message: item.content,
-            plan: null,
-            pending: false,
-            stopped: false,
-            restored: true,
-          },
-    )
+    messages.value = items.map(item => {
+      if (item.role === 'user') return { role: 'user', text: item.content }
+      // 计划、意图、步骤这些「这条回复长什么样」的信息存在 payload 里。
+      // 老记录没有这一列（那时还没存），那就只剩一句话——这是数据本身的限制，
+      // 不拿正文去反推一个假计划出来。
+      const saved = item.payload || {}
+      return {
+        role: 'assistant',
+        source: saved.source || '',
+        tokens: saved.tokens ?? 0,
+        message: item.content,
+        type: saved.type || '',
+        plan: saved.plan || null,
+        intent: saved.intent || null,
+        steps: saved.steps || [],
+        hint: saved.hint || '',
+        question: saved.question || '',
+        missing: saved.missing || [],
+        suggestions: saved.suggestions || [],
+        options: saved.options || [],
+        fields: saved.fields || [],
+        pending: false,
+        stopped: false,
+        restored: true,
+      }
+    })
     scrollToBottom(true)
   } catch {
     memoryCount.value = 0
@@ -819,15 +960,51 @@ async function loadConversationMemory() {
   }
 }
 
+/* 「本次启动」标记：sessionStorage 跟着 WebView / 标签页的生命周期走，应用一关就没了 ——
+   正好用来区分「新一次启动」与「同一次运行内切走再切回」。 */
+const BOOT_KEY = 'filepilot.agent.booted'
+
+function isFirstEntryOfThisRun() {
+  try {
+    if (sessionStorage.getItem(BOOT_KEY) === '1') return false
+    sessionStorage.setItem(BOOT_KEY, '1')
+    return true
+  } catch {
+    /* 隐私模式等拿不到 sessionStorage：退回原来的「接着上次那条」，不擅自重置 */
+    return false
+  }
+}
+
 /* 启动：先拉会话列表，再决定当前会话 ——
-   沿用「上次那条且确有内容」的；否则接最近一条历史；都没有才新开。 */
+   1. 本次启动后的**首次**进入：一律从「新任务」开始，不读也不恢复 localStorage 里那条，
+      直接放行 hydrating 闸门，让欢迎页稳稳渲染（用户 2026-10-07 要求：进来就是这张空态）；
+   2. 同一次运行内再进来：沿用当前会话，切走再切回不打断；
+   3. 旧会话一条没删，仍在左栏任务列表里可翻。
+   注意：第 1 条与 v23「压掉欢迎页闪现」的初衷方向相反 —— 那里要消除的是
+   「闪一下欢迎页又被旧对话顶掉」，这里要的是「稳定停在欢迎页」。
+   两者都不希望欢迎页一闪而过，所以 hydrating 闸门照旧保留。 */
 async function initConversations() {
   await loadConversationList()
+
+  if (isFirstEntryOfThisRun()) {
+    newConversation()
+    hydrating.value = false
+    return
+  }
+
+  /* 同一次运行内再进来：只认 localStorage 里那条。
+     不能再用「stored 不在后端列表里就退回最近一条历史」的老 fallback ——
+     刚新建的空会话在发出第一条消息之前不会落库、也就不在列表里，
+     一 fallback，用户切去别的选项卡再回来就会莫名看到一条毫不相干的旧对话。
+     （2026-10-07 实测翻车：hero 被顶掉、最近那条历史会话冒出来。） */
   const stored = readStoredConversation()
-  const known = stored && conversations.value.some(item => item.conversation_id === stored)
-  const id = known ? stored : conversations.value[0]?.conversation_id || stored || newConversationId()
+  const id = stored || conversations.value[0]?.conversation_id || newConversationId()
   conversationId.value = id
   persistConversation(id)
+  // 会话定下来之后再认领任务卡：本会话有在跑的任务就接回来，没有就保持空
+  job.restore()
+  // restore 只认内存里的槽位；刷新过页面的话槽位是空的，得去后端把「等待确认」的任务接回来
+  adoptWaitingTask()
   await loadConversationMemory()
 }
 
@@ -1485,14 +1662,14 @@ onBeforeUnmount(() => {
                 </ul>
               </div>
 
-              <div class="prefs__section" v-if="prefs?.common_paths?.length">
+              <div class="prefs__section" v-if="knownPaths.length">
                 <div class="prefs__label">常用路径</div>
                 <div class="prefs__chips">
                   <button
-                    v-for="item in prefs.common_paths.slice(0, 8)"
+                    v-for="item in knownPaths.slice(0, 8)"
                     :key="item.path"
                     type="button"
-                    :title="item.path"
+                    :title="item.session ? `${item.path}（本次对话用过）` : item.path"
                     @click="draft = item.path"
                   >{{ item.path }}</button>
                 </div>
@@ -1510,11 +1687,36 @@ onBeforeUnmount(() => {
           </el-popover>
         </header>
 
-        <!-- 空态：标记 + 大标题居中，输入框落在下方。
-             hydrating 期间两者都不渲染（只留空白的对话区），等记忆拉回来再决定是空态还是对话。 -->
+        <!-- 空态：不再是「一句话 + 一大片留白」。
+             标记 → 标题 → 四个起点 → 常用路径，纵向居中在对话区里。 -->
         <div v-if="!messages.length && !hydrating" class="agent-hero">
-          <AgentGlyph class="agent-hero__mark" :size="64" />
+          <AgentGlyph class="agent-hero__mark" :size="56" />
           <h1 class="agent-hero__title">你想让 <span class="agent-hero__brand">Atlas</span> 做什么？</h1>
+
+          <div class="hero-grid">
+            <button
+              v-for="item in HERO_ACTIONS"
+              :key="item.label"
+              type="button"
+              class="hero-card"
+              @click="send(item.prompt)"
+            >
+              <span class="hero-card__title">{{ item.label }}</span>
+              <span class="hero-card__note">{{ item.note }}</span>
+            </button>
+          </div>
+
+          <div v-if="knownPaths.length" class="hero-paths">
+            <span class="hero-paths__label">常用路径</span>
+            <button
+              v-for="item in knownPaths.slice(0, 4)"
+              :key="item.path"
+              type="button"
+              class="hero-path"
+              :title="item.session ? `${item.path}（本次对话用过）` : item.path"
+              @click="draft = item.path"
+            >{{ item.path }}</button>
+          </div>
         </div>
 
       <!-- 对话态 -->
@@ -1532,6 +1734,13 @@ onBeforeUnmount(() => {
           </template>
 
           <template v-else>
+            <!-- 身份锚：纯段落文本滚几轮就分不清哪句是谁说的。
+                 整块（方章 + 名字）横跨两列占第一行，下面的正文落到右列，
+                 不用再包一层 div，条件渲染的兄弟节点也不会错位。 -->
+            <div class="message__mark">
+              <span class="message__mark-box"><AgentGlyph :size="12" /></span>
+              <span class="message__who">Atlas</span>
+            </div>
             <div
               class="message-text markdown"
               :class="{ 'is-collapsed': isCollapsed(index) }"
@@ -1580,9 +1789,13 @@ onBeforeUnmount(() => {
                 :constraints="msg.plan.constraints || {}"
                 :estimate="msg.plan.estimate || {}"
                 :proposal="{}"
+                :tag-options="tagOptions"
                 :busy="!!jobRunning"
                 :waiting="false"
+                :editable="true"
+                :revise-busy="draftRevising === index"
                 :permission-mode="permissionMode"
+                @revise="patch => reviseDraft(index, patch)"
                 @modify="modifyPlan"
                 @details="showPlanDetails"
               />
@@ -1597,7 +1810,9 @@ onBeforeUnmount(() => {
                   开始分析（{{ stepsOf(msg).length }} 步）
                 </el-button>
                 <el-button size="small" plain :icon="Star" @click="saveAsRecipe(msg)">存成配方</el-button>
-                <span class="plan-draft__note">分析全程只读，出方案后还要你确认</span>
+                <span class="plan-draft__note">
+                  <template v-if="msg.revised">已按新条件重算 · 零 token；</template>分析全程只读，出方案后还要你确认
+                </span>
               </div>
             </div>
 
@@ -1733,19 +1948,13 @@ onBeforeUnmount(() => {
           未配置 DEEPSEEK_API_KEY，当前仅本地规则可用
         </div>
 
-        <!-- 示例胶囊放在输入框上方当引导条（恢复会话期间同样不闪） -->
-        <div v-if="!messages.length && !hydrating" class="examples">
-          <button v-for="item in EXAMPLES" :key="item" type="button" class="example" @click="send(item)">
-            {{ item }}
-          </button>
-        </div>
-
+        <!-- 示例胶囊已并入空态的入口卡（.hero-grid），输入框上方不再重复摆一排 -->
         <div class="composer">
           <el-input
             v-model="draft"
             ref="composerInput"
             type="textarea"
-            :autosize="{ minRows: 2, maxRows: 6 }"
+            :autosize="{ minRows: 1, maxRows: 6 }"
             resize="none"
             placeholder="随心输入"
             @keydown.enter.exact="onComposerEnter"
@@ -1963,8 +2172,12 @@ onBeforeUnmount(() => {
   --agent-fs-body-tight: 12.5px;
   --agent-fs-body-wide: 13.5px;
   --agent-fs-body: 14px;
-  --agent-composer-bottom-space: 90px;
+  --agent-composer-bottom-space: 76px;
   --agent-caret-pulse: 1.1s;
+  /* 任务列表的状态点：只在「确实知道状态」时上色，见 task-item__dot */
+  --agent-status-dot: 7px;
+  /* 助手消息的身份锚方章 */
+  --agent-mark-size: 22px;
   display: flex;
   height: 100vh;
 }
@@ -1993,13 +2206,13 @@ onBeforeUnmount(() => {
 }
 
 .task-panel__title {
-  color: var(--ink-2);
+  color: var(--ink);
   font-size: var(--fs-title);
   font-weight: 600;
 }
 
 .task-panel__count {
-  color: var(--ink-4);
+  color: var(--ink-3);
   font-size: var(--fs-note);
 }
 
@@ -2029,6 +2242,9 @@ onBeforeUnmount(() => {
 }
 
 /* 无底、不描边；左对齐到列表项的同一左栅格（此前居中，是全面板唯一脱栅格的一行） */
+/* 「新建任务」用主色文字（不加边框、不加底色）——
+   面板顶部需要一个彩色锚点，否则整栏从标题到列表清一色灰。
+   加框会把它抬成按钮，与「面板里全是记录」的调子不搭。 */
 .task-new {
   display: flex;
   align-items: center;
@@ -2038,7 +2254,7 @@ onBeforeUnmount(() => {
   height: 34px;
   margin: 8px 0 4px;
   padding: 0 10px;                 /* 与列表项文字同一左边缘 */
-  color: var(--ink-2);
+  color: var(--primary);
   background: transparent;         /* 白底（用户要求灰底换白底） */
   border: 0;
   border-radius: var(--agent-radius-card);
@@ -2051,8 +2267,8 @@ onBeforeUnmount(() => {
 }
 
 .task-new:hover {
-  color: var(--ink);
-  background: var(--inset);        /* 白底之后，悬停才给一层极淡的底提示可点 */
+  color: var(--primary-ink);
+  background: var(--primary-soft);   /* 悬停给一层主色淡底，与它的颜色呼应 */
 }
 
 .task-list {
@@ -2068,7 +2284,7 @@ onBeforeUnmount(() => {
 
 .task-group__label {
   padding: 8px 0 2px 10px;
-  color: var(--ink-4);
+  color: var(--ink-3);
   font-size: var(--fs-micro);
   letter-spacing: 0.02em;
 }
@@ -2080,11 +2296,14 @@ onBeforeUnmount(() => {
   border-top: 1px solid var(--hairline);
 }
 
-/* 列表项：不描边、不加灰底（用户要求「这个灰底都换成白底」），当前项只用标题加深 + 加粗区分 */
+/* 列表项：不描边、不加灰底（用户要求「这个灰底都换成白底」），当前项只用标题加深 + 加粗区分。
+   左内边距保持 10px —— 面板 padding 12px + 10px = 22px，这是全站统一的文字左边缘，
+   改动它会让「新建任务」和列表项标题错开一条线。
+   v25 曾给当前项加过左侧 2px 主色条，**用户当场否掉**，已移除 —— 别再翻烙饼。 */
 .task-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   padding: 7px 10px;
   border-radius: var(--agent-radius-card);
   cursor: pointer;
@@ -2095,7 +2314,6 @@ onBeforeUnmount(() => {
   background: var(--inset);        /* 悬停才出底，静止时是纯白 */
 }
 
-/* 当前项：一层很淡的主色底（用户 2026-10-04 指定），标题同时加深加粗 */
 .task-item.is-active {
   background: var(--primary-soft);
 }
@@ -2107,21 +2325,24 @@ onBeforeUnmount(() => {
   gap: 2px;
 }
 
+/* 标题用真正的深色（`--ink`），不用 `--ink-2` 的中灰 ——
+   五条中灰标题堆在一起，整栏就是一片灰，这就是「太灰」的主因。
+   当前项因此不能再靠「比别人深」来区分（大家一样深），改靠字重 600 + 淡主色底。 */
 .task-item__title {
   overflow: hidden;
-  color: var(--ink-2);
-  font-size: var(--fs-note);
+  color: var(--ink);
+  font-size: var(--agent-fs-body-tight);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .task-item.is-active .task-item__title {
-  color: var(--ink);
   font-weight: 600;
 }
 
 .task-item__meta {
-  color: var(--ink-4);
+  color: var(--ink-3);
   font-size: var(--fs-micro);
   font-variant-numeric: tabular-nums;
 }
@@ -2177,14 +2398,18 @@ onBeforeUnmount(() => {
 }
 
 /* ------------------------------------------------------------------ 空态 */
+/* 从前是「一个标记 + 一行大标题 + 一大片留白」，进来不知道该干什么。
+   现在排成：标记 → 标题 → 四个起点 → 常用路径，纵向居中，宽度与阅读栏对齐。 */
 .agent-hero {
   flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;           /* 居中对齐 */
-  justify-content: flex-end;     /* 标题贴近输入框，而不是居中在一大片空白天花板 */
-  gap: 20px;
-  padding-bottom: var(--agent-composer-bottom-space);          /* 输入框 + composer-zone 上间距 + 透气留白 */
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-5);
+  width: min(var(--reading-width), 100%);
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-5) var(--space-4);
   min-height: 0;
 }
 
@@ -2196,12 +2421,82 @@ onBeforeUnmount(() => {
 .agent-hero__title {
   margin: 0;
   color: var(--ink);
-  font-size: clamp(30px, 3vw, 42px);
+  font-size: clamp(26px, 2.6vw, 34px);
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1.2;
   text-align: center;
   animation: hero-rise var(--duration-slow) var(--ease) var(--duration-micro) both;
+}
+
+/* 四个起点：两列、只描边不填充。
+   空态要保持轻 —— 一上来就摆四块灰底卡片，页面立刻变沉。 */
+.hero-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.hero-card {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--agent-radius-control);
+  cursor: pointer;
+  transition: background-color var(--duration-quick) var(--ease), border-color var(--duration-quick) var(--ease);
+}
+
+.hero-card:hover {
+  background: var(--inset);
+  border-color: var(--hairline-strong);
+}
+
+.hero-card__title {
+  color: var(--ink);
+  font-size: var(--fs-card-title);
+  font-weight: 500;
+}
+
+.hero-card__note {
+  color: var(--ink-3);
+  font-size: var(--fs-micro);
+}
+
+.hero-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: center;
+}
+
+.hero-paths__label {
+  color: var(--ink-4);
+  font-size: var(--fs-micro);
+}
+
+.hero-path {
+  max-width: 220px;
+  overflow: hidden;
+  padding: 2px var(--space-2);
+  color: var(--ink-3);
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: color var(--duration-quick) var(--ease), border-color var(--duration-quick) var(--ease);
+}
+
+.hero-path:hover {
+  color: var(--ink);
+  border-color: var(--hairline-strong);
 }
 
 /* 标题统一成一个颜色（此前「Atlas」单独用品牌色，深色主题下和白标题撞色）。
@@ -2219,21 +2514,27 @@ onBeforeUnmount(() => {
 }
 
 /* ---------------------------------------------------------------- 输入区 */
+/* 版心内的分隔线：页眉下缘与输入区上缘各一条 760px 的 hairline，
+   上下把对话围成一个「文件」的区间。两条线宽度一致，看起来才像一个系统。 */
 .composer-zone {
   position: relative;            /* 「回到底部」以此为锚点上浮 */
-  width: min(824px, 100%);
+  flex: none;
+  width: min(var(--reading-width), 100%);
   margin: 0 auto;
-  padding-top: 20px;
+  padding: var(--space-3) var(--space-5) var(--space-4);
+  border-top: 1px solid var(--hairline);
 }
 
+/* 命令栏，不是评论框：圆角收紧、投影降一档、内边距压紧。
+   原来 26px 圆角 + sh-2 更像移动端的输入胶囊，撑不起「工具」的重量。 */
 .composer {
   display: grid;
-  gap: 8px;
-  padding: 16px 16px 14px;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4) var(--space-2);
   background: var(--surface);
   border: 1px solid var(--hairline-strong);
-  border-radius: 26px;
-  box-shadow: var(--sh-2);
+  border-radius: var(--agent-radius-lg);
+  box-shadow: var(--sh-1);
 }
 
 /* 悬停不再改投影：原先从 --sh-2 跳到 --sh-3 是模态级的重量，一颗常驻输入框承受不起。
@@ -2419,40 +2720,20 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-.examples {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  padding-bottom: 10px;
-}
-
-.example {
-  padding: 8px 14px;
-  color: var(--ink-2);
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-pill);
-  font-size: 13px;
-  cursor: pointer;
-  transition: color var(--duration-quick) var(--ease), border-color var(--duration-quick) var(--ease);
-}
-
-.example:hover {
-  color: var(--primary);
-  border-color: var(--primary);
-}
-
 /* ------------------------------------------------------------ 主区标题栏 */
-/* 极简无框：不画分隔线，靠留白与对话区分隔；标题 + 一行小字元信息，右侧只一个圆形＋ */
+/* 标题 + 一行小字元信息，右侧是状态条与设置入口。
+   下缘一条 hairline 与对话区作别 —— 这一步让标题区从「一行字」变成「页眉」。 */
 .agent-head {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: min(824px, 100%);
+  gap: var(--space-2);
+  width: min(var(--reading-width), 100%);
   margin: 0 auto;
-  padding: 18px 0 8px;
+  padding: var(--space-4) var(--space-5) var(--space-3);
+  /* 收口线：标题区与对话区之间拉一条 hairline，内容从此有了「页眉」的身份，
+     也给滚动的内容一个起点。宽度与对话阅读栏一致，两栏左右对齐。 */
+  border-bottom: 1px solid var(--hairline);
 }
 
 .agent-head__icon {
@@ -2515,14 +2796,17 @@ onBeforeUnmount(() => {
 
 .agent-chip {
   flex: none;
-  padding: 2px 9px;
+  padding: 2px var(--space-2);
   color: var(--ink-3);
-  font-size: var(--agent-fs-sm);
+  font-size: var(--fs-micro);
   white-space: nowrap;
   background: var(--inset);
   border-radius: var(--radius-pill);
 }
 
+/* 状态条的颜色只留给「需要你动手」的那一项：
+   待确认 = 主色，磁盘吃紧 = 告警。其余一律中性灰 ——
+   三项都上色会把标题的注意力摊平，看着就吵。 */
 .agent-chip.is-active {
   color: var(--primary-ink);
   background: var(--primary-soft);
@@ -2754,9 +3038,11 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  width: min(824px, 100%);
+  /* 阅读栏：限宽居中。长文本横跨整个宽屏会读不下去——两侧留白是从这里
+     「有意留出来的」，而不是没填满。宽度与顶部标题栏共用同一个 token。 */
+  width: min(var(--reading-width), 100%);
   margin: 0 auto;
-  padding: 8px 0 26px;              /* 底部留出悬浮操作行的位置 */
+  padding: var(--space-2) var(--space-5) var(--space-5);
   scrollbar-width: thin;
   scrollbar-color: var(--hairline-strong) transparent;
 }
@@ -2781,10 +3067,51 @@ onBeforeUnmount(() => {
 
 .message {
   position: relative;              /* 操作行以它为基准做绝对定位 */
-  max-width: 92%;
+  max-width: 100%;
   color: var(--ink);
-  font-size: var(--agent-fs-body);
-  line-height: 1.7;
+  font-size: var(--agent-fs-body-wide);
+  line-height: 1.65;
+}
+
+/* 助手消息：左侧立一个身份锚（山脊方章 + 名字），正文落右列。
+   用两列网格而不是再包一层 div —— 这一层里有五六个条件渲染的兄弟节点，
+   包一层就得整块重排缩进，网格只改样式、不动结构。 */
+.message.is-assistant {
+  display: grid;
+  grid-template-columns: var(--agent-mark-size) minmax(0, 1fr);
+  column-gap: var(--space-3);
+  row-gap: 0;
+  align-items: start;
+}
+
+.message.is-assistant > *:not(.message__mark) {
+  grid-column: 2;
+}
+
+.message__mark {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+
+.message__mark-box {
+  display: grid;
+  place-items: center;
+  width: var(--agent-mark-size);
+  height: var(--agent-mark-size);
+  color: var(--primary-ink);
+  background: var(--primary-soft);
+  border-radius: var(--agent-radius-sm);
+}
+
+.message__who {
+  color: var(--ink-4);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 /* 间距按「轮次」组织：用户 → 它的回复贴紧（同一组），换新的一问才拉开 */
@@ -2798,7 +3125,7 @@ onBeforeUnmount(() => {
 .message.is-user + .message.is-assistant,
 .message.is-user + .message.is-user,
 .message.is-assistant + .message.is-assistant {
-  margin-top: 10px;
+  margin-top: var(--space-3);
 }
 
 /* 用户消息：中性灰气泡、右对齐（参照 Codex / ChatGPT 的用户消息；不用蓝色，避免抢戏） */
@@ -2926,7 +3253,15 @@ onBeforeUnmount(() => {
 }
 
 /* 消息操作行：hover 才出现，且脱离布局 ——
-   以前它 opacity:0 却仍占 20px，每条消息凭空变高，整屏显得很空。 */
+   以前它 opacity:0 却仍占 20px，每条消息凭空变高，整屏显得很空。
+
+   两个坑（2026-10-06 实测复现，都会让人"点不到"）：
+   1. 用 margin-top 挪 4px，会在消息底边和操作行顶边之间留出 4px 死区 ——
+      鼠标往下跨过它时既不在消息里也不在行里，父级 mouseleave 立刻触发，行当着你面消失。
+      改用 padding-top，行的盒子从消息底边**紧贴**开始，没有死区。
+   2. 行的盒子会往下伸约 23px，而相邻两条助手消息只隔 12px ——
+      伸出去的部分被**下一条消息盖在上面**（z-index 高的后来者居上）。
+      所以父级 hover 时要抬一层，再给行一层与主区同色的底，叠上去才干净。 */
 .message-actions {
   position: absolute;
   top: 100%;
@@ -2934,7 +3269,8 @@ onBeforeUnmount(() => {
   z-index: 2;
   display: flex;
   gap: 14px;
-  margin-top: 4px;
+  padding-top: 4px;
+  background: var(--surface);     /* 与主区同色：与下一条消息重叠时不留脏底 */
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--duration-quick) var(--ease);
@@ -2943,6 +3279,13 @@ onBeforeUnmount(() => {
 .message-actions.is-visible {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* 悬停（或键盘进入）时把整条消息抬到邻条之上，
+   否则伸出去的操作行会被下一条消息盖住，按钮看得见点不着。 */
+.message:hover,
+.message:focus-within {
+  z-index: 3;
 }
 
 .message.is-user .message-actions {
@@ -3193,8 +3536,12 @@ onBeforeUnmount(() => {
   border-radius: var(--agent-radius-panel);
 }
 
+/* 分区标题（「模型」/「API Key」）。
+   用 --ink-3 而不是 --ink-4：深色下 --ink-4(#636366) 落在 --surface(#2c2c2e) 上
+   只有 2.3:1，分区标题几乎看不清；--ink-3 提到 4.2:1，浅色下也顺带从 2.6:1 提到 3.5:1。
+   它本来就该是"安静但读得见"的一层，不是"接近背景色"。 */
 .panel__title {
-  color: var(--ink-4);
+  color: var(--ink-3);
   font-size: var(--agent-fs-sm);
   letter-spacing: 0.06em;
 }

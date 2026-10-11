@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   CircleCheck,
@@ -11,7 +11,7 @@ import {
   Search,
   Tickets,
 } from '@element-plus/icons-vue'
-import { exportLogs, getLogs } from '../api/filepilot'
+import { exportLogs, getLogs, getReclaimedStats } from '../api/filepilot'
 import DataTable from '../components/DataTable.vue'
 import StatCard from '../components/StatCard.vue'
 import { formatCount, formatDateTime, formatShortTime } from '../utils/formatters'
@@ -54,6 +54,24 @@ const filtered = computed(() => rows.value.filter(item => (
   && (!keyword.value || `${item.path}${item.note}`.toLowerCase().includes(keyword.value.toLowerCase()))
 )))
 
+/* 分页。日志动辄几百条，一次性全塞给 el-table（464 行 × 5 列，其中 4 列还挂自定义 slot）
+   会把主线程占住一秒多（实测 longtask 单次 646ms）—— 切进来时画面会白一下。
+   分页后首屏只渲染一页，渲染开销降到几十毫秒。 */
+const page = ref(1)
+const pageSize = ref(50)
+
+const paged = computed(() => {
+  const list = filtered.value
+  const maxPage = Math.max(1, Math.ceil(list.length / pageSize.value))
+  const current = Math.min(page.value, maxPage)
+  return list.slice((current - 1) * pageSize.value, current * pageSize.value)
+})
+
+/* 换筛选条件或搜索词后回到第一页，否则会停在一个已经越界的页码上 */
+watch([typeFilter, resultFilter, keyword], () => {
+  page.value = 1
+})
+
 const successRate = computed(() => {
   if (!rows.value.length) return '—'
   const ok = rows.value.filter(item => item.result === '成功').length
@@ -64,6 +82,10 @@ const okCount = computed(() => rows.value.filter(item => item.result === '成功
 
 /* 指标卡：与首页共用 StatCard（渐变图标 + 大数字 + 底部注释）。
    注释只放「补充信息」，不复述上面的大数字。 */
+/* 累计腾出 —— 自用工具最需要的那个数字：不是"做了什么"，而是"省了多少"。
+   口径见后端 reclaimed_stats()：文件先进隔离区，清空隔离区后才真正释放磁盘空间。 */
+const reclaimed = ref(null)
+
 const cards = computed(() => {
   const total = rows.value.length
   const shown = filtered.value.length
@@ -75,6 +97,15 @@ const cards = computed(() => {
       note: `来源 ${source.value}`,
       icon: Tickets,
       tone: 'blue',
+    },
+    {
+      title: '累计腾出',
+      value: reclaimed.value?.total_text || '0 B',
+      note: reclaimed.value?.count
+        ? `${reclaimed.value.count} 次清理/迁移 · 今天 ${reclaimed.value.today_text}`
+        : '还没有清理过',
+      icon: Collection,
+      tone: 'green',
     },
     {
       title: '成功率',
@@ -117,10 +148,27 @@ function resultTag(result) {
   return 'warning'
 }
 
+/* 让出两帧：先把「骨架 + 遮罩」交给浏览器画出来，再灌数据。
+   离场页的 opacity 淡出跑在合成器线程上、不受主线程阻塞影响，会一路推进到全透明；
+   而新页面的图层若还没提交绘制，屏幕上就只剩空白底色 —— 那正是「白屏一下」的来源。
+   让出一帧之后遮罩已经画在屏幕上，长任务期间看到的是遮罩，而不是空白。 */
+function nextPaint() {
+  return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+}
+
+async function loadReclaimed() {
+  try {
+    reclaimed.value = await getReclaimedStats()
+  } catch {
+    /* 拿不到就显示 0，不拦着日志列表 */
+  }
+}
+
 async function load(showMessage = false) {
   loading.value = true
   try {
     const data = await getLogs()
+    await nextPaint()
     raw.value = data.logs || []
     source.value = data.source || 'logs.json'
     if (showMessage) ElMessage.success('日志已刷新')
@@ -143,7 +191,10 @@ async function exportFile() {
   }
 }
 
-onMounted(() => load())
+onMounted(() => {
+  load()
+  loadReclaimed()
+})
 </script>
 
 <template>
@@ -187,7 +238,7 @@ onMounted(() => load())
       <DataTable
         v-loading="loading"
         :columns="columns"
-        :data="filtered"
+        :data="paged"
         empty-text="暂无操作日志"
         :empty-icon="Collection"
       >
@@ -200,11 +251,41 @@ onMounted(() => load())
           <span class="status-dot" :class="`status-dot--${resultTag(value) === 'danger' ? 'danger' : resultTag(value) === 'success' ? 'success' : 'warning'}`">{{ value }}</span>
         </template>
       </DataTable>
+
+      <!-- 分页条：左「共 N 条」、右翻页，上缘一条 hairline 与表格拉开层次。
+           条数文案自己写，不用 pagination 的 total 版式 —— 全站没配 Element Plus 中文
+           locale，那个版式会渲染成英文「Total 464」，jumper 也是「Go to」。 -->
+      <div v-if="filtered.length" class="logs-pager">
+        <span class="logs-pager__total">共 {{ formatCount(filtered.length) }} 条</span>
+        <el-pagination
+          v-model:current-page="page"
+          :page-size="pageSize"
+          :total="filtered.length"
+          layout="prev, pager, next"
+          background
+        />
+      </div>
     </section>
   </div>
 </template>
 
 <style scoped>
+/* 分页条：上缘一条 hairline 与表格分开 */
+.logs-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--hairline);
+}
+
+.logs-pager__total {
+  color: var(--ink-3);
+  font-size: var(--fs-note);
+}
+
 .filters {
   display: grid;
   grid-template-columns: 180px 150px minmax(0, 1fr);

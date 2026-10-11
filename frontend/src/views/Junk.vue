@@ -1,12 +1,15 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CircleCheck, Coin, Delete, Files, Refresh, Warning } from '@element-plus/icons-vue'
+import { CircleCheck, Coin, Delete, Files, QuestionFilled, Refresh, Warning } from '@element-plus/icons-vue'
 import EmptyState from '../components/EmptyState.vue'
 import StatCard from '../components/StatCard.vue'
-import { startClean, startJunkScan } from '../api/filepilot'
+import { explainItem, startClean, startJunkScan } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
+import { useHandoffTarget } from '../composables/useHandoff'
+import HandoffNote from '../components/HandoffNote.vue'
+import NextSteps from '../components/NextSteps.vue'
 import JobProgress from '../components/JobProgress.vue'
 import TargetPicker from '../components/TargetPicker.vue'
 import { formatBytes, formatCount } from '../utils/formatters'
@@ -16,9 +19,52 @@ const scan = useJob('junk.scan')
 const clean = useJob('junk.clean')
 
 const path = ref('')
+/* 跨页接力：从别的页面带着目录过来时，直接填好这个框（不自动开跑） */
+const { handed, from } = useHandoffTarget(path)
+
+/** 反向接力：用同一个目录去别的能力，不用再选一次 */
+const nextSteps = [{ name: 'space', label: '空间地图' }, { name: 'migrate', label: '迁移到别处' }]
 const includeCaution = ref(false)
 const cleanMode = ref('isolate')
 const selected = ref(new Set())
+
+/* 每项的「这是什么」解释，按路径存；没问过就没有这个 key */
+const explanations = ref({})
+
+/**
+ * 问模型「这是什么、删了会怎样」。
+ *
+ * ⚠️ 这是全项目**第二处会联网、会花 token 的地方**（第一处是 Agent 助手页）。
+ *    所以只在这个问号被**主动点**时才调 —— 没有自动调用、没有「批量解释全部」。
+ *    没配 Key / 断网都会如实说出原因，绝不编内容。
+ *    再点一次收起，免得解释把列表撑长。
+ */
+async function askExplain(item) {
+  const key = item.path
+  const current = explanations.value[key]
+  if (current?.loading) return
+  if (current?.text) {
+    const next = { ...explanations.value }
+    delete next[key]
+    explanations.value = next
+    return
+  }
+  explanations.value = { ...explanations.value, [key]: { loading: true } }
+  try {
+    const data = await explainItem({
+      kind: 'junk',
+      item: { name: item.name, path: item.path, size_text: item.size_text, reason: item.reason },
+    })
+    let entry
+    if (data.available === false) entry = { reason: data.reason }
+    else if (data.error) entry = { reason: data.error }
+    else entry = { text: data.text, tokens: data.tokens }
+    explanations.value = { ...explanations.value, [key]: entry }
+  } catch (error) {
+    explanations.value = { ...explanations.value, [key]: { reason: error.message } }
+  }
+}
+
 const result = ref(null)
 
 const modeOptions = [
@@ -151,6 +197,34 @@ onMounted(async () => {
   <div class="section-stack form-page">
 
     <section class="app-card panel-card">
+      <HandoffNote v-if="handed" :path="handed" :from="from" @dismiss="handed = ''" />
+
+      <el-alert
+        v-if="config?.junk_rule_issues?.length"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="`你放的自定义规则里有 ${config.junk_rule_issues.length} 条没读进来（其余规则照常生效）`"
+      >
+        <ul class="rule-issues">
+          <li v-for="issue in config.junk_rule_issues" :key="issue">{{ issue }}</li>
+        </ul>
+        <p class="rule-issues__path">文件：{{ config.junk_rules_file }}</p>
+      </el-alert>
+
+      <el-alert
+        v-if="config?.junk_rule_issues?.length"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="`你放的自定义规则里有 ${config.junk_rule_issues.length} 条没读进来（其余规则照常生效）`"
+      >
+        <ul class="rule-issues">
+          <li v-for="issue in config.junk_rule_issues" :key="issue">{{ issue }}</li>
+        </ul>
+        <p class="rule-issues__path">文件：{{ config.junk_rules_file }}</p>
+      </el-alert>
+
       <TargetPicker
         v-model:path="path"
         v-model:excludes="excludes"
@@ -181,6 +255,8 @@ onMounted(async () => {
         <StatCard v-for="item in cards" :key="item.title" v-bind="item" />
       </section>
 
+      <NextSteps :path="path" origin="junk" :steps="nextSteps" />
+
       <section
         v-for="level in levels"
         :key="level.level"
@@ -203,8 +279,24 @@ onMounted(async () => {
             <div class="junk-row__copy">
               <strong>{{ item.name }}</strong>
               <small class="path-text" :title="item.path">{{ item.path }}</small>
+              <!-- 解释就地显示：有内容才占位，没问过就什么都不显示 -->
+              <small v-if="explanations[item.path]?.text" class="junk-row__explain">
+                {{ explanations[item.path].text }}
+              </small>
+              <small v-else-if="explanations[item.path]?.reason" class="junk-row__explain is-quiet">
+                {{ explanations[item.path].reason }}
+              </small>
             </div>
             <el-tag size="small" effect="plain" type="info">{{ item.is_dir ? '空目录' : item.size_text }}</el-tag>
+            <el-button
+              class="junk-row__ask"
+              size="small"
+              text
+              :icon="QuestionFilled"
+              :loading="explanations[item.path]?.loading"
+              title="这是什么？删了会怎样（需要联网，会消耗 token）"
+              @click="askExplain(item)"
+            />
           </div>
 
           <p v-if="level.items.length > 200" class="muted">
@@ -275,6 +367,74 @@ onMounted(async () => {
   background: var(--surface-2);
   border: 1px solid var(--hairline);
   border-radius: 12px;
+}
+
+.rule-issues {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: var(--fs-note);
+  line-height: 1.7;
+}
+
+.rule-issues__path {
+  margin: 6px 0 0;
+  color: var(--ink-3);
+  font-size: var(--fs-note);
+}
+
+.rule-issues {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: var(--fs-note);
+  line-height: 1.7;
+}
+
+.rule-issues__path {
+  margin: 6px 0 0;
+  color: var(--ink-3);
+  font-size: var(--fs-note);
+}
+
+.junk-row__explain {
+  margin-top: 3px;
+  color: var(--ink-2);
+  font-size: var(--fs-note);
+  line-height: 1.55;
+}
+
+/* 失败/未配置时用更淡的色，别和解释正文抢注意力 */
+.junk-row__explain.is-quiet {
+  color: var(--ink-3);
+}
+
+.junk-row__ask {
+  flex: 0 0 auto;
+  color: var(--ink-3);
+}
+
+.junk-row__ask:hover {
+  color: var(--primary);
+}
+
+.junk-row__explain {
+  margin-top: 3px;
+  color: var(--ink-2);
+  font-size: var(--fs-note);
+  line-height: 1.55;
+}
+
+/* 失败/未配置时用更淡的色，别和解释正文抢注意力 */
+.junk-row__explain.is-quiet {
+  color: var(--ink-3);
+}
+
+.junk-row__ask {
+  flex: 0 0 auto;
+  color: var(--ink-3);
+}
+
+.junk-row__ask:hover {
+  color: var(--primary);
 }
 
 .junk-row__copy {

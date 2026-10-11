@@ -6,8 +6,6 @@
 """
 from __future__ import annotations
 
-import fnmatch
-import os
 from pathlib import Path
 
 from .. import config, fsutil, permissions
@@ -27,14 +25,19 @@ CACHE_MARKERS = (
 RULE_BY_ID = {rule["id"]: rule for rule in config.JUNK_RULES}
 
 
+# 规则表在导入时编译成正则，之后每个文件只花一次正则匹配。
+# 原来每个文件都要遍历 28 个 glob 模式、每个模式调一次 fnmatch（内部两次 normcase）——
+# 实测这是本服务一半的耗时（见 config.glob_matcher 的注释）。
+_MATCHER_ORDER = config.junk_matchers(
+    frozenset({"empty_dir", "zero_byte", "huge_file", "browser_cache"})
+)
+
+
 def _match_rule(path: Path) -> str | None:
     name = path.name.lower()
-    for rule in config.JUNK_RULES:
-        if rule["id"] in {"empty_dir", "zero_byte", "huge_file", "browser_cache"}:
-            continue
-        for pattern in rule["patterns"]:
-            if fnmatch.fnmatch(name, pattern.lower()):
-                return rule["id"]
+    for rule, matcher in _MATCHER_ORDER:
+        if matcher is not None and matcher.match(name):
+            return rule["id"]
     return None
 
 
@@ -57,14 +60,15 @@ def run_junk_scan(ctx: JobContext) -> dict:
     errors: list[str] = []
     scanned = 0
 
-    for path in fsutil.iter_files(root, excludes=excludes, progress=ctx.tick, cancelled=ctx.cancelled):
+    for entry in fsutil.iter_entries(root, excludes=excludes, progress=ctx.tick, cancelled=ctx.cancelled):
         ctx.check_cancel()
         scanned += 1
         try:
-            stat = path.stat()
+            stat = entry.stat()          # Windows 上目录列表已带回属性，零系统调用
         except OSError as exc:
-            errors.append(f"{path}：{fsutil.human_error(exc)}")
+            errors.append(f"{entry.path}：{fsutil.human_error(exc)}")
             continue
+        path = Path(entry.path)
 
         rule_id = None
         if stat.st_size == 0:
@@ -95,28 +99,47 @@ def run_junk_scan(ctx: JobContext) -> dict:
             "protected": False,
         })
 
-    # 空文件夹（单独一遍：必须自底向上，才能把嵌套空目录都清掉）
+    # 空文件夹：单独一趟「只数名字、不 stat」的遍历。
+    #
+    # **为什么不并进主遍历**：主遍历按用户排除项剪掉了 node_modules / __pycache__ /
+    # build / dist —— 而空目录恰恰经常就在那里（清空后的 __pycache__、构建残留的 build）。
+    # 并进去会静默丢掉这些候选，那是功能回退，不是提速。
+    #
+    # 但相对旧的 `os.walk(topdown=False)` 有两处实质改进：
+    #   1. **不再钻进系统只读区**。旧版对 Windows / Program Files / $Recycle.Bin
+    #      只是"记完就 continue"，`subdirs` 没清空，于是**整棵走进了 C:\Windows** ——
+    #      这正是"扫 C 盘很慢"的一大来源。现在这些目录根本不进（走 IMPLICIT 排除）。
+    #   2. 不逐文件 stat，只取目录列表里的名字。
     if "empty_dir" in enabled_rules:
         ctx.phase(1, "正在查找空文件夹")
-        for current, subdirs, filenames in os.walk(root, topdown=False):
-            ctx.check_cancel()
+
+        def _collect_empty_dir(current: str, _depth: int, raw_dirs: list[str], raw_files: list[str]) -> None:
+            if raw_dirs or raw_files:
+                return
             current_path = Path(current)
             if current_path == root:
-                continue
+                return
             if fsutil.write_block_reason(current_path, permission) or fsutil.is_readonly_zone(current_path):
-                continue
-            names = set(subdirs) | set(filenames)
-            if not names:
-                buckets["empty_dir"].append({
-                    "name": current_path.name,
-                    "path": str(current_path),
-                    "size": 0,
-                    "size_text": "0 B",
-                    "level": "safe",
-                    "rule": "empty_dir",
-                    "is_dir": True,
-                    "protected": False,
-                })
+                return
+            buckets["empty_dir"].append({
+                "name": current_path.name,
+                "path": str(current_path),
+                "size": 0,
+                "size_text": "0 B",
+                "level": "safe",
+                "rule": "empty_dir",
+                "is_dir": True,
+                "protected": False,
+            })
+
+        for _ in fsutil.iter_entries(
+            root,
+            excludes=[],                 # 只保留 IMPLICIT 排除：用户排除项不参与
+            on_dir=_collect_empty_dir,
+            skip_self_protected=False,   # 只读检测：自保护目录也要能进
+            cancelled=ctx.cancelled,
+        ):
+            pass
 
     ctx.phase(2, "正在汇总")
     levels: list[dict] = []

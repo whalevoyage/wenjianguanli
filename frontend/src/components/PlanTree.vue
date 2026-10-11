@@ -71,6 +71,13 @@ const estimate = computed(() => props.proposal?.executable ? props.proposal : pr
 const estimateKnown = computed(() => Boolean(estimate.value?.freed_text || estimate.value?.item_count))
 const canApprove = computed(() => Boolean(props.proposal?.executable) && props.waiting)
 
+/** 按钮行右端的状态说明。只说此刻一定成立的事，不替调用方下结论。 */
+const stateNote = computed(() => {
+  if (props.waiting) return '停在这里等你决定'
+  if (props.busy) return '分析中，全程只读'
+  return '只读预览，确认前不会动文件'
+})
+
 const constraintBits = computed(() => {
   const source = props.constraints || props.intent?.constraints || {}
   const bits = []
@@ -348,9 +355,11 @@ function submitRevise() {
         </el-button>
         <el-button v-if="hasPlan" size="small" plain @click="emit('details')">查看详细清单</el-button>
         <el-button v-if="busy" size="small" plain @click="emit('discard')">撤销本次计划</el-button>
+        <span v-if="hasPlan" class="plan__actions-spacer"></span>
         <span v-if="permissionMode === 'readonly' && canApprove" class="plan__actions-note">
           只读档不可执行写操作
         </span>
+        <span v-else-if="hasPlan" class="plan__actions-note">{{ stateNote }}</span>
       </div>
     </div>
   </section>
@@ -368,16 +377,24 @@ function submitRevise() {
   border-color: var(--hairline-strong);
 }
 
+/* 卡头：浅灰底 + 下缘一条 hairline，把它从卡身里分出来。
+   整块一色只会看起来像一坨；有「表头」才有秩序感，也才像一张正经的卡片。
+   收起时不画那条线 —— 否则会和卡片自身的下边框挤成一条双线。 */
 .plan__head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
-  padding: 10px 12px;
+  padding: var(--space-2) var(--space-3);
   border: 0;
-  background: transparent;
+  border-bottom: 1px solid transparent;
+  background: var(--surface-2);
   cursor: pointer;
   text-align: left;
+}
+
+.plan.is-open .plan__head {
+  border-bottom-color: var(--hairline);
 }
 
 .plan__caret {
@@ -426,7 +443,7 @@ function submitRevise() {
 }
 
 .plan__body {
-  padding: 0 12px 12px;
+  padding: var(--space-3);
 }
 
 .plan__risk-note {
@@ -550,12 +567,19 @@ function submitRevise() {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
+.plan__actions-spacer {
+  flex: 1;
+}
+
+/* 状态说明挂在按钮行右端。刻意不写「0 token」：
+   这份计划可能是本地规则免费出的，也可能是花过 token 换来的，
+   组件本身拿不到来源，替它下结论就是在编。 */
 .plan__actions-note {
-  font-size: 12px;
+  font-size: var(--fs-note);
   color: var(--ink-3);
 }
 
