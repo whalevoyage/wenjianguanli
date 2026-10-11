@@ -547,6 +547,34 @@ VIRTUAL_EXPORT_LIMIT = int(os.getenv("FILEPILOT_EXPORT_LIMIT") or 20000)
 
 
 # ---------------------------------------------------------------------------
+# 全文检索（B1）
+#
+# **白名单**而不是黑名单：只索引"明确是文本"的扩展名。
+# 宁可漏掉一个改了扩展名的文本文件，也不能把一个 2GB 的二进制塞进索引。
+# PDF / docx / xlsx 刻意不在列 —— 抽它们要新增依赖，而本项目的硬约束是
+# 「可选依赖只有两个」（pywebview / pillow）。
+# ---------------------------------------------------------------------------
+
+SEARCH_TEXT_EXTS = frozenset({
+    ".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".tsv",
+    ".json", ".jsonl", ".yaml", ".yml", ".xml", ".ini", ".toml", ".cfg",
+    ".conf", ".properties", ".editorconfig", ".gitignore",
+    ".py", ".js", ".mjs", ".cjs", ".ts", ".jsx", ".tsx", ".vue",
+    ".java", ".kt", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".cs",
+    ".sql", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
+    ".html", ".htm", ".css", ".scss", ".less", ".svg",
+    ".r", ".m", ".lua", ".php", ".rb", ".pl", ".swift", ".scala",
+})
+
+# 单文件正文抽取上限：一个 2GB 的日志就能把索引撑爆
+SEARCH_MAX_FILE_BYTES = int(os.getenv("FILEPILOT_SEARCH_MAX_BYTES") or 2 * 1024 * 1024)
+# 一次索引最多新处理多少个文件（超出如实标 truncated，不假装全部建完）
+SEARCH_FILE_LIMIT = int(os.getenv("FILEPILOT_SEARCH_LIMIT") or 200000)
+# 单次检索最多返回多少条
+SEARCH_RESULT_LIMIT = int(os.getenv("FILEPILOT_SEARCH_RESULT_LIMIT") or 200)
+
+
+# ---------------------------------------------------------------------------
 # Agent 偏好记忆、语义排除与风险分级
 #
 # prefs.json 是 Agent 的「长期记忆」，与对话记忆（filepilot.db 的 memory 表）分开：

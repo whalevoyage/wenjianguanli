@@ -92,6 +92,15 @@ export const startMigrate = payload => unwrap(api.post('/migrate', payload))
 export const startClean = payload => unwrap(api.post('/clean', payload))
 export const startBackup = payload => unwrap(api.post('/backup', payload))
 
+/* ---------------- 全文检索（B1）---------------- */
+// 建索引是 Job（耗时长、要进度、可中断）；检索是即时 GET —— 敲完就要出结果，
+// 套一层 Job + SSE 只会平白加延迟。
+export const startSearchIndex = payload => unwrap(api.post('/search/index', payload))
+export const searchFiles = (keyword, limit = 0) =>
+  unwrap(api.get('/search', { params: { q: keyword, limit } }))
+export const getSearchStatus = () => unwrap(api.get('/search/status'))
+export const removeSearchRoot = path => unwrap(api.post('/search/remove', { path }))
+
 /* ---------------- 回收站 ---------------- */
 export const getTrash = () => unwrap(api.get('/trash'))
 export const restoreTrash = ids => unwrap(api.post('/trash/restore', { ids }))

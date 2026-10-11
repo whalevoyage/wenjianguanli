@@ -19,9 +19,11 @@ import { formatCount, formatDateTime, formatShortTime } from '../utils/formatter
 const TYPE_LABELS = {
   scan: '扫描分析',
   tree: '空间地图',
+  index: '内容索引',
   virtual: '整理预览',
   projects: '项目雷达',
   duplicate: '重复文件',
+  similar: '相似图片',
   junk: '垃圾文件',
   migrate: '跨盘迁移',
   clean: '清理',

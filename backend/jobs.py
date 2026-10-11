@@ -51,6 +51,9 @@ def reclaimed_bytes(job_type: str, result: dict) -> int:
 JOB_TYPES: dict[str, str] = {
     "scan": "扫描分析",
     "tree": "空间地图",
+    # 内容索引**不在** WRITE_JOB_TYPES 里：它只读用户文件，
+    # 索引库写在项目自己的状态目录（内部状态），所以「只读」档必须放行。
+    "index": "内容索引",
     "virtual": "整理预览",
     "projects": "项目雷达",
     "duplicate": "重复文件",

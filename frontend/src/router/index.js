@@ -82,6 +82,16 @@ const routes = [
     },
   },
   {
+    path: '/search',
+    name: 'search',
+    component: () => import('../views/Search.vue'),
+    meta: {
+      group: '分析',
+      title: '全文检索',
+      description: '按文件名与正文内容查找文件，先建索引、之后毫秒级命中。',
+    },
+  },
+  {
     path: '/migrate',
     name: 'migrate',
     component: () => import('../views/Migrate.vue'),

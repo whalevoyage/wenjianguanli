@@ -18,8 +18,8 @@ from pydantic import BaseModel, Field
 from . import config, diagnostics, fsutil, permissions, scheduler, store
 from .jobs import JOB_TYPES, JobContext, manager
 from .services import (
-    agent, agent_task, backup, clean, duplicates, explain, junk, migrate, overview, projects, scan,
-    similar, virtual,
+    agent, agent_task, backup, clean, duplicates, explain, index, junk, migrate, overview, projects,
+    scan, similar, virtual,
 )
 
 app = FastAPI(title="FilePilot Lite API", version="2.0.0")
@@ -62,6 +62,17 @@ class SimilarRequest(BaseModel):
     excludes: list[str] | None = None
     threshold: int = Field(default=similar.DEFAULT_THRESHOLD, ge=0, le=32)
     min_size: int = Field(default=similar.DEFAULT_MIN_SIZE, ge=0)
+
+
+class SearchIndexRequest(BaseModel):
+    """建立 / 更新检索索引。max_depth=0 表示不限深度。"""
+    path: str
+    excludes: list[str] | None = None
+    max_depth: int = Field(default=0, ge=0)
+
+
+class SearchRootRequest(BaseModel):
+    path: str
 
 
 class ExplainRequest(BaseModel):
@@ -493,6 +504,49 @@ def start_similar_scan(request: SimilarRequest):
     except (OSError, ValueError) as exc:
         raise _friendly(exc)
     return _launch("similar", f"相似图片 {root}", str(root), request.model_dump(), similar.run_similar_scan)
+
+
+# ---------------------------------------------------------------------------
+# 全文检索（B1）
+# ---------------------------------------------------------------------------
+
+@app.post("/api/search/index")
+def start_search_index(request: SearchIndexRequest):
+    """为一个目录建立 / 更新检索索引。
+
+    **只读用户文件**，不移动不删除任何东西；索引库写在项目自己的状态目录里，
+    属于内部状态而非用户文件，所以「只读」档也放行。
+    """
+    try:
+        root = fsutil.resolve_dir(request.path)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    return _launch("index", f"建立索引 {root}", str(root), request.model_dump(), index.run_index)
+
+
+@app.get("/api/search")
+def search_files(q: str = "", limit: int = 0, root: str = ""):
+    """即时检索。
+
+    **刻意不做成任务**：检索要的是敲完回车就出结果，套一层 Job + SSE 只会平白加延迟。
+    Job 是给"耗时长、要进度、要中断"的东西用的（建索引是 Job，检索不是）。
+    """
+    return index.query(q, limit=limit or None, root_id=root)
+
+
+@app.get("/api/search/status")
+def search_status():
+    """索引现状：有没有可用的 FTS5、已索引哪些目录、一共多少文件。"""
+    return index.status()
+
+
+@app.post("/api/search/remove")
+def remove_search_root(request: SearchRootRequest):
+    """忘掉某个目录的索引（目录本身可能已经被删掉了，所以这里不校验存在性）。"""
+    try:
+        return index.remove_root(request.path)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
 
 
 @app.post("/api/agent/explain")

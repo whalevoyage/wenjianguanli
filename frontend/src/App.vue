@@ -99,6 +99,7 @@ const navGroups = [
       { path: '/scan', label: '扫描分析', hint: '目录 · 大文件', icon: Search },
       { path: '/duplicates', label: '重复文件', hint: 'SHA-256 分桶', icon: CopyDocument },
       { path: '/junk', label: '垃圾文件', hint: '三级安全分级', icon: Delete },
+      { path: '/search', label: '全文检索', hint: '文件名 · 正文', icon: Search },
     ],
   },
   {

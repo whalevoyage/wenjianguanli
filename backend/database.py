@@ -13,6 +13,11 @@ _lock = threading.RLock()
 # 会话标题的「噪音字符」：纯符号/一两个字的消息当标题没有信息量，会被退回默认名
 _TITLE_NOISE_RE = re.compile(r"[\s·.。,，、\-—_~!！?？:：;；'\"“”‘’()（）\[\]【】]+")
 
+# 检索高亮的标记字符：FTS5 的 highlight()/snippet() 直接把这两颗字符插在命中词两侧，
+# 前端按它们切段渲染，**不走 v-html**（文件名/正文内容不可信，不能直接当 HTML 注入）。
+SEARCH_MARK_OPEN = "\u0001"
+SEARCH_MARK_CLOSE = "\u0002"
+
 
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,6 +76,7 @@ def connect(path: Path) -> sqlite3.Connection:
     CREATE INDEX IF NOT EXISTS idx_logs_type ON logs(type);
     """)
     _ensure_memory_payload(conn)
+    _ensure_search(conn)
     return conn
 
 
@@ -84,6 +90,190 @@ def _ensure_memory_payload(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(agent_memory)").fetchall()}
     if "payload" not in columns:
         conn.execute("ALTER TABLE agent_memory ADD COLUMN payload TEXT NOT NULL DEFAULT ''")
+
+
+# ---------------------------------------------------------------------------
+# 全文检索（B1）：索引根目录 / 文件元数据 / FTS5 索引
+# ---------------------------------------------------------------------------
+
+def _ensure_search(conn: sqlite3.Connection) -> None:
+    """检索用表。FTS5 是 SQLite 的内置扩展，但**个别构建可能没编进去** ——
+    那种情况下只跳过虚拟表，其余功能照常；检索页据 `search_available()` 明确提示，
+    不静默失败、也不影响任何既有功能。
+    """
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS search_root (
+        id          TEXT PRIMARY KEY,
+        path        TEXT NOT NULL,
+        added_at    TEXT NOT NULL,
+        indexed_at  TEXT,
+        file_count  INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS search_file (
+        id         INTEGER PRIMARY KEY,
+        root_id    TEXT NOT NULL,
+        path       TEXT NOT NULL UNIQUE,
+        name       TEXT NOT NULL,
+        ext        TEXT NOT NULL DEFAULT '',
+        size       INTEGER NOT NULL DEFAULT 0,
+        mtime      REAL    NOT NULL DEFAULT 0,
+        indexed_at TEXT    NOT NULL,
+        is_text    INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_search_file_root ON search_file(root_id);
+    """)
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5("
+            "name, body, tokenize='unicode61')"
+        )
+    except sqlite3.OperationalError:
+        # 该 SQLite 构建没有 FTS5：检索自降级，其余功能一律不受影响
+        pass
+
+
+def _has_fts(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='search_fts'"
+    ).fetchone()
+    return row is not None
+
+
+def search_available(path: Path) -> bool:
+    """当前构建是否支持全文索引（供接口如实告知前端）。"""
+    with _lock, connect(path) as conn:
+        return _has_fts(conn)
+
+
+def search_roots(path: Path) -> list[dict]:
+    with _lock, connect(path) as conn:
+        rows = conn.execute("SELECT * FROM search_root ORDER BY added_at").fetchall()
+    return [
+        {"id": row["id"], "path": row["path"], "added_at": row["added_at"],
+         "indexed_at": row["indexed_at"], "file_count": row["file_count"]}
+        for row in rows
+    ]
+
+
+def search_state(path: Path, root_id: str) -> dict[str, list]:
+    """path -> [rowid, size, mtime]。
+
+    **一次性读进内存**，供增量比对 —— 逐文件查库是 O(n) 次 I/O，
+    正是 GOTCHAS「哈希缓存别每文件读一遍写一遍」踩过的坑。
+    """
+    with _lock, connect(path) as conn:
+        rows = conn.execute(
+            "SELECT id,path,size,mtime FROM search_file WHERE root_id=?", (root_id,)
+        ).fetchall()
+    return {row["path"]: [row["id"], row["size"], row["mtime"]] for row in rows}
+
+
+def search_apply(
+    path: Path,
+    root_id: str,
+    root_path: str,
+    records: list[dict],
+    deleted_paths: list[str],
+    indexed_at: str,
+) -> None:
+    """把一批「新增/更新」记录与「失联」路径写进索引（单事务）。
+
+    `records[i]` 的 `rowid` 为空表示新增，否则是就地更新（先删 FTS 行再按同一 rowid 重插）。
+    """
+    with _lock, connect(path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO search_root(id,path,added_at,indexed_at,file_count) VALUES(?,?,?,?,0)",
+            (root_id, root_path, indexed_at, indexed_at),
+        )
+        if _has_fts(conn):
+            for record in records:
+                if record.get("rowid"):
+                    row_id = int(record["rowid"])
+                    conn.execute(
+                        "UPDATE search_file SET name=?,ext=?,size=?,mtime=?,indexed_at=?,is_text=? WHERE id=?",
+                        (record["name"], record["ext"], record["size"], record["mtime"],
+                         indexed_at, record["is_text"], row_id),
+                    )
+                    conn.execute("DELETE FROM search_fts WHERE rowid=?", (row_id,))
+                else:
+                    cursor = conn.execute(
+                        "INSERT INTO search_file(root_id,path,name,ext,size,mtime,indexed_at,is_text) "
+                        "VALUES(?,?,?,?,?,?,?,?)",
+                        (root_id, record["path"], record["name"], record["ext"], record["size"],
+                         record["mtime"], indexed_at, record["is_text"]),
+                    )
+                    row_id = int(cursor.lastrowid)
+                conn.execute(
+                    "INSERT INTO search_fts(rowid,name,body) VALUES(?,?,?)",
+                    (row_id, record["name_tokens"], record.get("body_tokens") or ""),
+                )
+            for gone in deleted_paths:
+                row = conn.execute("SELECT id FROM search_file WHERE path=?", (gone,)).fetchone()
+                if row:
+                    conn.execute("DELETE FROM search_fts WHERE rowid=?", (row["id"],))
+                    conn.execute("DELETE FROM search_file WHERE id=?", (row["id"],))
+        else:
+            # 没有 FTS5 时仍维护元数据，只是"按内容搜"不可用
+            for record in records:
+                if record.get("rowid"):
+                    conn.execute(
+                        "UPDATE search_file SET name=?,ext=?,size=?,mtime=?,indexed_at=?,is_text=? WHERE id=?",
+                        (record["name"], record["ext"], record["size"], record["mtime"],
+                         indexed_at, record["is_text"], int(record["rowid"])),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO search_file(root_id,path,name,ext,size,mtime,indexed_at,is_text) "
+                        "VALUES(?,?,?,?,?,?,?,?)",
+                        (root_id, record["path"], record["name"], record["ext"], record["size"],
+                         record["mtime"], indexed_at, record["is_text"]),
+                    )
+            for gone in deleted_paths:
+                conn.execute("DELETE FROM search_file WHERE path=?", (gone,))
+        conn.execute(
+            "UPDATE search_root SET file_count=(SELECT COUNT(*) FROM search_file WHERE root_id=?), indexed_at=? WHERE id=?",
+            (root_id, indexed_at, root_id),
+        )
+
+
+def search_forget_root(path: Path, root_id: str) -> int:
+    with _lock, connect(path) as conn:
+        ids = [row["id"] for row in conn.execute(
+            "SELECT id FROM search_file WHERE root_id=?", (root_id,)
+        ).fetchall()]
+        if _has_fts(conn):
+            for row_id in ids:
+                conn.execute("DELETE FROM search_fts WHERE rowid=?", (row_id,))
+        conn.execute("DELETE FROM search_file WHERE root_id=?", (root_id,))
+        conn.execute("DELETE FROM search_root WHERE id=?", (root_id,))
+    return len(ids)
+
+
+def search_query(path: Path, match: str, limit: int, root_id: str = "") -> list[dict]:
+    """按 FTS5 MATCH 表达式检索。
+
+    - `highlight(...,0,...)` 取**完整**文件名（带标记）而不是片段 —— snippet 对没有命中的
+      列会返回开头截断的一小段，拿来当文件名会显示成残缺的名字。
+    - `snippet(...,1,...)` 取正文命中片段。
+    """
+    sql = (
+        "SELECT f.id, f.path, f.name, f.ext, f.size, f.mtime, f.root_id, f.is_text, "
+        "highlight(search_fts, 0, ?, ?) AS name_hl, "
+        "snippet(search_fts, 1, ?, ?, '…', 20) AS body_hl "
+        "FROM search_fts JOIN search_file f ON f.id = search_fts.rowid "
+        "WHERE search_fts MATCH ? "
+    )
+    params: list[Any] = [SEARCH_MARK_OPEN, SEARCH_MARK_CLOSE, SEARCH_MARK_OPEN, SEARCH_MARK_CLOSE, match]
+    if root_id:
+        sql += "AND f.root_id = ? "
+        params.append(root_id)
+    sql += "ORDER BY bm25(search_fts), f.mtime DESC LIMIT ?"
+    params.append(limit)
+    with _lock, connect(path) as conn:
+        if not _has_fts(conn):
+            return []
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(row) for row in rows]
 
 
 def append_log(path: Path, entry: dict[str, Any], limit: int) -> None:
