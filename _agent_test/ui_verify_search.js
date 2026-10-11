@@ -7,6 +7,10 @@ const path = require('path')
 const OUT = path.join(__dirname, 'shots')
 fs.mkdirSync(OUT, { recursive: true })
 
+// 默认打 dev server；验证**打包版**时传 ORIGIN=http://127.0.0.1:<打包版端口>
+// （打包版同源托管前端与 API，所以直接当普通站点访问即可）。
+const ORIGIN = process.env.ORIGIN || 'http://127.0.0.1:5173'
+
 // ★ 样本树**不能**建在数据目录下：数据目录是自保护目录，
 //   iter_entries 会剪掉它下面的子目录（根层文件不受影响）→ 子目录整层消失。
 const BASE = path.join(os.tmpdir(), '_b1_ui_tree')
@@ -33,7 +37,7 @@ const shot = async (page, name) => {
   page.on('pageerror', e => errors.push('pageerror: ' + e.message))
   page.on('console', m => { if (m.type() === 'error') errors.push('console.error: ' + m.text()) })
 
-  await page.goto('http://127.0.0.1:5173/#/search', { waitUntil: 'load' })
+  await page.goto(`${ORIGIN}/#/search`, { waitUntil: 'load' })
   await page.waitForTimeout(1500)
 
   console.log('[0] 页面加载')
