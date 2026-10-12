@@ -11,11 +11,13 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Files, FolderOpened, Search, Timer } from '@element-plus/icons-vue'
+import { Delete, Files, FolderOpened, Search, Timer } from '@element-plus/icons-vue'
 import { getSearchStatus, removeSearchRoot, revealFile, searchFiles, startSearchIndex } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
 import { useHandoffTarget } from '../composables/useHandoff'
+import { useSelectionClean } from '../composables/useSelectionClean'
+import { formatBytes } from '../utils/formatters'
 import HandoffNote from '../components/HandoffNote.vue'
 import NextSteps from '../components/NextSteps.vue'
 import TargetPicker from '../components/TargetPicker.vue'
@@ -112,6 +114,32 @@ const rows = computed(() => (result.value?.results || []).map(item => ({
   nameParts: segments(item.name),
   snippetParts: segments(item.snippet),
 })))
+
+/* 处理检索结果：勾选 → 送进隔离区 / 送进系统回收站。
+   复用全站清理链路，不新增"直接删文件"的接口。 */
+const { selected, cleanMode, clean, modeOptions, toggle, setAll, clear, submit } = useSelectionClean('search.clean')
+
+const hitPaths = computed(() => rows.value.map(row => row.path))
+const allPicked = computed(() => hitPaths.value.length > 0 && hitPaths.value.every(path => selected.value.has(path)))
+const selectionStats = computed(() => {
+  const size = new Map(rows.value.map(row => [row.path, row.size || 0]))
+  let total = 0
+  for (const path of selected.value) total += size.get(path) || 0
+  return { count: selected.value.size, size_text: formatBytes(total) }
+})
+
+function togglePickAll() {
+  if (allPicked.value) clear()
+  else setAll(hitPaths.value)
+}
+
+function runClean() {
+  const byPath = new Map(rows.value.map(row => [row.path, row]))
+  const items = [...selected.value].map(path => ({
+    path, is_dir: false, rule: 'search', size: byPath.get(path)?.size || 0,
+  }))
+  submit(items)
+}
 
 const canIndex = computed(() => paths.value.some(p => p.trim()) && status.value.enabled && !running.value)
 const canSearch = computed(() => Boolean(keyword.value.trim()) && Boolean(status.value.total_files) && !searching.value)
@@ -310,11 +338,19 @@ onMounted(async () => {
             <h3 class="panel-title">命中结果</h3>
             <p class="panel-subtitle">{{ result.total }} 个 · {{ result.took_ms }} ms</p>
           </div>
+          <el-button v-if="rows.length" size="small" plain @click="togglePickAll">
+            {{ allPicked ? '清空选择' : '全选' }}
+          </el-button>
         </div>
 
         <div class="hit-list">
           <article v-for="item in rows" :key="item.path" class="hit">
             <div class="hit__head">
+              <el-checkbox
+                class="hit__pick"
+                :model-value="selected.has(item.path)"
+                @update:model-value="toggle(item.path)"
+              />
               <span class="hit__icon"><el-icon><Files /></el-icon></span>
               <span class="hit__name">
                 <span v-for="(part, index) in item.nameParts" :key="index" :class="{ 'is-hit': part.hit }">{{ part.text }}</span>
@@ -337,6 +373,19 @@ onMounted(async () => {
           </article>
         </div>
       </section>
+
+      <section v-if="selected.size" class="app-card panel-card sticky-bar">
+        <div class="sticky-bar__info">
+          <strong>已选 {{ selectionStats.count }} 项</strong>
+          <span class="muted">预计释放 {{ selectionStats.size_text }}</span>
+          <el-segmented v-model="cleanMode" :options="modeOptions" size="small" />
+        </div>
+        <el-button type="primary" :icon="Delete" :loading="clean.running.value" @click="runClean">
+          执行清理
+        </el-button>
+      </section>
+
+      <JobProgress v-if="clean.job.value" :job="clean.job.value" @cancel="clean.cancel" @rollback="clean.rollback" />
 
       <EmptyState
         v-else
@@ -505,5 +554,34 @@ onMounted(async () => {
 .auto-refresh-row__note {
   color: var(--ink-3);
   font-size: var(--fs-note);
+}
+
+/* 命中行的勾选框：与图标同一行 */
+.hit__pick {
+  margin-right: 2px;
+}
+
+/* 结果处理条：与查重 / 垃圾页一致 */
+.sticky-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-color: var(--primary);
+}
+
+.sticky-bar__info strong {
+  display: block;
+}
+
+.sticky-bar__info .muted {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.sticky-bar__info :deep(.el-segmented) {
+  margin-top: 8px;
 }
 </style>

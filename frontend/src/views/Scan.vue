@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { Clock, Files, FolderOpened, PieChart, Search } from '@element-plus/icons-vue'
+import { Clock, Delete, Files, FolderOpened, PieChart, Search } from '@element-plus/icons-vue'
 import EmptyState from '../components/EmptyState.vue'
 import { startScan, saveScanSnapshot, listScanSnapshots, compareScanSnapshots } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
@@ -12,6 +12,7 @@ import TargetPicker from '../components/TargetPicker.vue'
 import HandoffNote from '../components/HandoffNote.vue'
 import NextSteps from '../components/NextSteps.vue'
 import { useHandoffTarget } from '../composables/useHandoff'
+import { useSelectionClean } from '../composables/useSelectionClean'
 import { formatBytes, formatCount, formatDuration } from '../utils/formatters'
 
 const { config, excludes, load: loadConfig } = useConfig()
@@ -31,6 +32,38 @@ const primaryPath = computed(() => paths.value[0] || '')
 
 const staleDays = ref(30)
 const result = ref(null)
+
+/* 处理扫描结果：勾选 → 送进隔离区 / 送进系统回收站。
+   复用全站清理链路，不新增"直接删文件"的接口。 */
+const { selected, cleanMode, clean, modeOptions, toggle, setAll, clear, submit } = useSelectionClean('scan.clean')
+
+/* 可勾选的项：大文件（TOP 10）+ 长期未动（前 8）—— 与界面上展示的一致 */
+const pickableRows = computed(() => [
+  ...(result.value?.large_files || []).slice(0, 10),
+  ...(result.value?.stale_files || []).slice(0, 8),
+])
+const pickablePaths = computed(() => pickableRows.value.map(row => row.path))
+const allPicked = computed(() =>
+  pickablePaths.value.length > 0 && pickablePaths.value.every(path => selected.value.has(path)))
+const selectionStats = computed(() => {
+  const size = new Map(pickableRows.value.map(row => [row.path, row.size || 0]))
+  let total = 0
+  for (const path of selected.value) total += size.get(path) || 0
+  return { count: selected.value.size, size_text: formatBytes(total) }
+})
+
+function togglePickAll() {
+  if (allPicked.value) clear()
+  else setAll(pickablePaths.value)
+}
+
+function runClean() {
+  const byPath = new Map(pickableRows.value.map(row => [row.path, row]))
+  const items = [...selected.value].map(path => ({
+    path, is_dir: false, rule: 'scan', size: byPath.get(path)?.size || 0,
+  }))
+  submit(items)
+}
 
 const staleOptions = [
   { label: '30 天未动', value: 30 },
@@ -96,6 +129,7 @@ const categoryChart = computed(() => {
 })
 
 const largeColumns = [
+  { prop: '_pick', label: '选', width: 52, align: 'center' },
   { prop: 'rank', label: '排名', width: 70, align: 'right' },
   { prop: 'name', label: '文件名', minWidth: 220 },
   { prop: 'directory', label: '所在目录', minWidth: 300 },
@@ -301,7 +335,13 @@ onMounted(async () => {
 
           <div v-if="result.stale_files?.length" class="stale-list">
             <div v-for="file in result.stale_files.slice(0, 8)" :key="file.path" class="stale-item">
-              <strong>{{ file.name }}</strong>
+              <div class="stale-item__head">
+                <el-checkbox
+                  :model-value="selected.has(file.path)"
+                  @update:model-value="toggle(file.path)"
+                />
+                <strong>{{ file.name }}</strong>
+              </div>
               <span>{{ file.size_text }} · {{ file.modified_time }}</span>
               <small class="path-text" :title="file.path">{{ file.path }}</small>
               <small class="muted">{{ file.source }}</small>
@@ -324,8 +364,31 @@ onMounted(async () => {
           </div>
         </div>
 
-        <DataTable :columns="largeColumns" :data="largeRows.slice(0, 10)" empty-text="没有符合条件的大文件" />
+        <DataTable :columns="largeColumns" :data="largeRows.slice(0, 10)" empty-text="没有符合条件的大文件">
+          <template #_pick="{ row }">
+            <el-checkbox
+              :model-value="selected.has(row.path)"
+              @update:model-value="toggle(row.path)"
+            />
+          </template>
+        </DataTable>
       </section>
+
+      <section v-if="selected.size" class="app-card panel-card sticky-bar">
+        <div class="sticky-bar__info">
+          <strong>已选 {{ selectionStats.count }} 项</strong>
+          <span class="muted">预计释放 {{ selectionStats.size_text }}</span>
+          <el-segmented v-model="cleanMode" :options="modeOptions" size="small" />
+        </div>
+        <div class="sticky-bar__actions">
+          <el-button size="small" plain @click="togglePickAll">{{ allPicked ? '清空' : '全选' }}</el-button>
+          <el-button type="primary" :icon="Delete" :loading="clean.running.value" @click="runClean">
+            执行清理
+          </el-button>
+        </div>
+      </section>
+
+      <JobProgress v-if="clean.job.value" :job="clean.job.value" @cancel="clean.cancel" @rollback="clean.rollback" />
 
       <section class="app-card panel-card">
         <div class="panel-title-row">
@@ -536,5 +599,42 @@ onMounted(async () => {
 
 .diff-size.down {
   color: var(--success, #30a46c);
+}
+
+/* 长期未动项：勾选框与文件名同一行 */
+.stale-item__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 结果处理条：与查重 / 垃圾页一致 */
+.sticky-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-color: var(--primary);
+}
+
+.sticky-bar__info strong {
+  display: block;
+}
+
+.sticky-bar__info .muted {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.sticky-bar__info :deep(.el-segmented) {
+  margin-top: 8px;
+}
+
+.sticky-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

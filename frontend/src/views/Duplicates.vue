@@ -8,6 +8,7 @@ import { startClean, startDuplicateScan, startSimilarScan } from '../api/filepil
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
 import { useHandoffTarget } from '../composables/useHandoff'
+import { useSelectionClean } from '../composables/useSelectionClean'
 import HandoffNote from '../components/HandoffNote.vue'
 import NextSteps from '../components/NextSteps.vue'
 import JobProgress from '../components/JobProgress.vue'
@@ -35,6 +36,43 @@ const selected = ref(new Set())
 const similarThreshold = ref(6)
 /* 旋转容忍：同一张图转 90/180/270° 也算相似。默认关（哈希算约 3 倍） */
 const similarRotations = ref(false)
+
+/* 相似图块的"处理"：勾选 → 送隔离区 / 送回收站。
+   与"完全重复"分开管（两块面板本来就分开）；同样复用 /api/clean，不新增删除接口。 */
+const {
+  selected: simSelected,
+  cleanMode: simCleanMode,
+  clean: simClean,
+  modeOptions: simModeOptions,
+  toggle: toggleSim,
+  setAll: setAllSim,
+  clear: clearSim,
+  submit: submitSim,
+} = useSelectionClean('duplicates.similar.clean')
+
+const simFiles = computed(() => (similar.value?.groups || []).flatMap(group => group.files || []))
+const simPaths = computed(() => simFiles.value.map(file => file.path))
+const simAllPicked = computed(() =>
+  simPaths.value.length > 0 && simPaths.value.every(path => simSelected.value.has(path)))
+const simStats = computed(() => {
+  const size = new Map(simFiles.value.map(file => [file.path, file.size || 0]))
+  let total = 0
+  for (const path of simSelected.value) total += size.get(path) || 0
+  return { count: simSelected.value.size, size_text: formatBytes(total) }
+})
+
+function toggleSimAll() {
+  if (simAllPicked.value) clearSim()
+  else setAllSim(simPaths.value)
+}
+
+function runSimClean() {
+  const byPath = new Map(simFiles.value.map(file => [file.path, file]))
+  const items = [...simSelected.value].map(path => ({
+    path, is_dir: false, rule: 'similar', size: byPath.get(path)?.size || 0,
+  }))
+  submitSim(items)
+}
 
 const metrics = computed(() => {
   if (!result.value) return []
@@ -324,7 +362,7 @@ onMounted(async () => {
     </template>
 
     <!-- 相似图片：**独立成块**，不并进上面的「完全重复」。
-         相似 ≠ 相同，删哪张得自己看图，所以这里只列出来、不给一键清理。 -->
+         相似 ≠ 相同，删哪张得自己看图确认 —— 给的是"逐张勾选"，不做一键全选。 -->
     <section v-if="similar" class="app-card panel-card">
       <div class="panel-title-row">
         <div>
@@ -333,9 +371,14 @@ onMounted(async () => {
             按画面相似度分组（缩过、压过、另存过的那些）；相似不等于相同，删哪张请自己看图确认
           </p>
         </div>
-        <span class="muted">
-          {{ formatCount(similar.scanned) }} 张参与比对<template v-if="similar.group_count"> · {{ similar.group_count }} 组 · 可省 {{ similar.redundant_text }}</template>
-        </span>
+        <div class="similar-head-actions">
+          <span class="muted">
+            {{ formatCount(similar.scanned) }} 张参与比对<template v-if="similar.group_count"> · {{ similar.group_count }} 组 · 可省 {{ similar.redundant_text }}</template>
+          </span>
+          <el-button v-if="simFiles.length" size="small" plain @click="toggleSimAll">
+            {{ simAllPicked ? '清空选择' : '全选' }}
+          </el-button>
+        </div>
       </div>
 
       <el-alert
@@ -366,6 +409,10 @@ onMounted(async () => {
             class="similar-file"
             :class="{ 'is-keep': group.keep === file.path }"
           >
+            <el-checkbox
+              :model-value="simSelected.has(file.path)"
+              @update:model-value="toggleSim(file.path)"
+            />
             <span class="similar-file__name">{{ file.name }}</span>
             <small class="path-text" :title="file.path">{{ file.path }}</small>
             <span class="similar-file__meta">{{ file.size_text }} · {{ file.mtime }}</span>
@@ -374,6 +421,19 @@ onMounted(async () => {
           </div>
         </div>
       </div>
+
+      <section v-if="simSelected.size" class="app-card panel-card sticky-bar">
+        <div class="sticky-bar__info">
+          <strong>已选 {{ simStats.count }} 张</strong>
+          <span class="muted">预计释放 {{ simStats.size_text }}，可随时还原</span>
+          <el-segmented v-model="simCleanMode" :options="simModeOptions" size="small" />
+        </div>
+        <el-button type="primary" :icon="Delete" :loading="simClean.running.value" @click="runSimClean">
+          执行清理
+        </el-button>
+      </section>
+
+      <JobProgress v-if="simClean.job.value" :job="simClean.job.value" @cancel="simClean.cancel" @rollback="simClean.rollback" />
     </section>
 
   </div>
@@ -514,7 +574,7 @@ onMounted(async () => {
 
 .similar-file {
   display: grid;
-  grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(120px, 220px) minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   padding: 5px 8px;
@@ -568,7 +628,7 @@ onMounted(async () => {
 
 .similar-file {
   display: grid;
-  grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(120px, 220px) minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   padding: 5px 8px;
@@ -618,5 +678,16 @@ onMounted(async () => {
 
 .similar-rotations {
   margin-left: 2px;
+}
+
+/* 相似图片标题行右侧：统计 + 全选按钮 */
+.similar-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sticky-bar__info :deep(.el-segmented) {
+  margin-top: 8px;
 }
 </style>
