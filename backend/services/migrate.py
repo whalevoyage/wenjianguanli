@@ -13,15 +13,20 @@ from ..jobs import JobContext
 SPACE_MARGIN = 200 * 1024 * 1024
 
 
-def _plan_items(ctx: JobContext, source: Path, target: Path, excludes, min_size: int, max_items: int,
+def _plan_items(ctx: JobContext, source: Path, dest_root: Path, excludes, min_size: int, max_items: int,
                 include_ext=None) -> list[dict]:
+    """列举 source 下待迁移的文件，目标为 `dest_root/<相对路径>`。
+
+    `dest_root` 由调用方决定：单来源时就是目标目录本身；多来源时是 `目标/<来源名>`，
+    这样两个来源里的同名文件各落在各自的顶层目录下，不会互相覆盖。
+    """
     ctx.phase(0, f"正在列举 {source} 下待迁移的文件")
     exts = {e.lower().lstrip(".") for e in (include_ext or []) if e}
     plan: list[dict] = []
     for entry in fsutil.iter_entries(source, excludes=excludes, progress=ctx.tick, cancelled=ctx.cancelled):
         ctx.check_cancel()
         try:
-            stat = entry.stat()          # Windows 上目录列表已带回属性，零系统调用
+            stat = entry.stat()          # Windows 目录列表已带回属性，零系统调用
         except OSError:
             continue
         if stat.st_size < min_size:
@@ -30,7 +35,7 @@ def _plan_items(ctx: JobContext, source: Path, target: Path, excludes, min_size:
         if exts and path.suffix.lower().lstrip(".") not in exts:
             continue
         relative = path.relative_to(source)
-        destination = target / relative
+        destination = dest_root / relative
         plan.append({
             "source": str(path),
             "target": str(destination),
@@ -45,9 +50,21 @@ def _plan_items(ctx: JobContext, source: Path, target: Path, excludes, min_size:
     return plan
 
 
+def _owning_root(path: Path, roots: list[Path]) -> Path | None:
+    """这条显式指定的条目属于哪个来源（用于逐个校验越界）。"""
+    for root in roots:
+        if fsutil._path_contains(root, path):
+            return root
+    return None
+
+
 def run_migrate(ctx: JobContext) -> dict:
     params = ctx.params
-    source = fsutil.resolve_dir(params.get("source_dir", ""))
+    # 多来源：`source_dirs`（列表）优先，回退到单个 `source_dir`（兼容旧调用方 / Agent / CLI）。
+    roots, notes = fsutil.resolve_sources(
+        {"paths": params.get("source_dirs") or [], "source_dir": params.get("source_dir", "")}
+    )
+    multi = len(roots) > 1
     target_raw = params.get("target_dir", "")
     excludes = params.get("excludes")
     dry_run = bool(params.get("dry_run", True))
@@ -62,14 +79,28 @@ def run_migrate(ctx: JobContext) -> dict:
     target = fsutil.normalize(target_raw)
     permission = permissions.current()
     fsutil.assert_writable(target, permission)
-    source, target = fsutil.assert_migration_paths(source, target)
+    # 每个来源都要过「不与目标重叠」检查（目标不能等于或落在任一来源内）
+    for root in roots:
+        fsutil.assert_migration_paths(root, target)
+
+    # 目录联接是「一个源 ↔ 一个目标」的语义，多来源下说不清，直接关掉并说明
+    if multi and create_junction:
+        create_junction = False
+        notes.append("多来源不做目录联接（联接是「一个源 ↔ 一个目标」的语义）")
+
+    prefixes = fsutil.source_prefixes(roots) if multi else [""] * len(roots)
+    source = roots[0]  # 兼容字段：标题/联接/摘要仍以首个来源为主
 
     # ---- 生成计划 ----
     explicit = params.get("items")
     if explicit:
         plan = []
         for item in explicit[:max_items]:
-            item_source = fsutil.assert_within(item["source"], source)
+            raw_source = Path(item["source"])
+            root = _owning_root(raw_source, roots)
+            if root is None:
+                continue
+            item_source = fsutil.assert_within(raw_source, root)
             item_target = fsutil.assert_within(item["target"], target)
             if not item_source.is_file():
                 continue
@@ -80,10 +111,16 @@ def run_migrate(ctx: JobContext) -> dict:
                 "name": item_source.name,
                 "size": actual_size,
                 "size_text": fsutil.format_size(actual_size),
+                "source_root": str(root),
             })
     else:
-        plan = _plan_items(ctx, source, target, excludes, min_size, max_items,
-                           include_ext=params.get("include_ext"))
+        plan = []
+        for root, prefix in zip(roots, prefixes):
+            dest_root = target / prefix if prefix else target
+            plan.extend(_plan_items(ctx, root, dest_root, excludes, min_size,
+                                    max_items - len(plan), include_ext=params.get("include_ext")))
+            if len(plan) >= max_items:
+                break
 
     free = fsutil.disk_free(target)
 
@@ -108,6 +145,9 @@ def run_migrate(ctx: JobContext) -> dict:
 
     summary = {
         "source_dir": str(source),
+        "source_dirs": [str(root) for root in roots],
+        "source_count": len(roots),
+        "notes": notes,
         "target_dir": str(target),
         "mode": mode,
         "item_count": len(plan),

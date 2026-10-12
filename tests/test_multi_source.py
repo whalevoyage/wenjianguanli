@@ -289,6 +289,74 @@ def test_endpoint_projects_and_search_paths_only(tmp_path: Path):
         assert captured["params"].get("paths") == [str(a), str(b)], fn.__name__
 
 
+# ---------------------------------------------------------------------------
+# 执行类多来源：跨盘迁移 / 项目备份（多源 → 单目标，各占一个顶层目录）
+# ---------------------------------------------------------------------------
+
+def _two_sources(tmp_path: Path):
+    a = tmp_path / "A"; a.mkdir()
+    b = tmp_path / "B"; b.mkdir()
+    (a / "same.txt").write_text("from A", encoding="utf-8")
+    (b / "same.txt").write_text("from B", encoding="utf-8")
+    (a / "sub").mkdir()
+    (a / "sub" / "deep.txt").write_text("deep", encoding="utf-8")
+    return a, b
+
+
+def test_migrate_multi_plan_splits_by_source(tmp_path: Path):
+    from backend.services import migrate
+    from backend.services.headless import HeadlessContext
+    a, b = _two_sources(tmp_path)
+    tgt = tmp_path / "target"; tgt.mkdir()
+    res = migrate.run_migrate(HeadlessContext({
+        "source_dirs": [str(a), str(b)], "target_dir": str(tgt), "dry_run": True, "mode": "move"}))
+    assert res["source_count"] == 2
+    targets = {item["target"] for item in res["plan"]}
+    # 两个同名文件各落在 target/A 与 target/B 下，不会互相覆盖
+    assert str(tgt / "A" / "same.txt") in targets
+    assert str(tgt / "B" / "same.txt") in targets
+    assert str(tgt / "A" / "sub" / "deep.txt") in targets
+
+
+def test_migrate_single_source_unchanged(tmp_path: Path):
+    from backend.services import migrate
+    from backend.services.headless import HeadlessContext
+    a, _b = _two_sources(tmp_path)
+    tgt = tmp_path / "target"; tgt.mkdir()
+    res = migrate.run_migrate(HeadlessContext({"source_dir": str(a), "target_dir": str(tgt), "dry_run": True}))
+    # 单源不前缀：target/same.txt（旧行为）
+    assert str(tgt / "same.txt") in {item["target"] for item in res["plan"]}
+
+
+def test_backup_multi_puts_each_source_in_zip(tmp_path: Path):
+    import zipfile
+    from backend.services import backup
+    from backend.services.headless import HeadlessContext
+    a, b = _two_sources(tmp_path)
+    res = backup.run_backup(HeadlessContext({
+        "source_dirs": [str(a), str(b)], "dest_dir": str(tmp_path / "bk")}))
+    assert res["source_count"] == 2
+    with zipfile.ZipFile(res["zip_path"]) as zf:
+        names = set(zf.namelist())
+    assert "A/same.txt" in names and "B/same.txt" in names and "A/sub/deep.txt" in names
+
+
+def test_endpoint_migrate_backup_source_dirs(tmp_path: Path):
+    captured = _stub_launch()
+    from backend import main
+    a = tmp_path / "a"; a.mkdir()
+    b = tmp_path / "b"; b.mkdir()
+    for fn, req, extra in (
+        (main.start_migrate, main.MigrateRequest, {"target_dir": str(tmp_path / "t")}),
+        (main.start_backup, main.BackupRequest, {}),
+    ):
+        captured.clear()
+        fn(req(source_dirs=[str(a), str(b)], **extra))
+        assert "个来源" in captured["title"], fn.__name__
+        assert captured["target"] == str(a), fn.__name__
+        assert captured["params"].get("source_dirs") == [str(a), str(b)], fn.__name__
+
+
 if __name__ == "__main__":
     import tempfile
     import shutil
@@ -322,6 +390,10 @@ if __name__ == "__main__":
     _run("t13", test_projects_multi)
     _run("t14", test_index_multi)
     _run("t15", test_endpoint_projects_and_search_paths_only)
+    _run("t16", test_migrate_multi_plan_splits_by_source)
+    _run("t17", test_migrate_single_source_unchanged)
+    _run("t18", test_backup_multi_puts_each_source_in_zip)
+    _run("t19", test_endpoint_migrate_backup_source_dirs)
     shutil.rmtree(tmp, ignore_errors=True)
     print("FAILS:", fails)
     sys.exit(1 if fails else 0)

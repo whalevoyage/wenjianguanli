@@ -20,7 +20,14 @@ from ..jobs import JobContext
 
 def run_backup(ctx: JobContext) -> dict:
     params = ctx.params
-    source = fsutil.resolve_dir(params.get("source_dir", ""))
+    # 多来源：`source_dirs`（列表）优先，回退到单个 `source_dir`（兼容旧调用方）。
+    roots, notes = fsutil.resolve_sources(
+        {"paths": params.get("source_dirs") or [], "source_dir": params.get("source_dir", "")}
+    )
+    multi = len(roots) > 1
+    source = roots[0]
+    # 每个来源在 ZIP 里占一个顶层目录（就是来源目录名）—— 多来源时天然不会互相覆盖。
+    prefixes = fsutil.source_prefixes(roots)
 
     # ★ 目标目录分两种来源，门禁口径不同：
     #   · 用户显式给了 dest_dir → 过写入白名单门禁（不许把备份写进桌面 / 系统目录）；
@@ -36,16 +43,24 @@ def run_backup(ctx: JobContext) -> dict:
         destination = config.STATE_DIR / "backups"
     destination.mkdir(parents=True, exist_ok=True)
 
-    ctx.phase(0, f"正在清点 {source} 下的文件")
-    files: list[Path] = []
+    ctx.phase(0, fsutil.sources_phrase("正在清点", roots))
+    files: list[tuple[Path, str]] = []      # (磁盘路径, ZIP 内路径)
     total_bytes = 0
-    for entry in fsutil.iter_entries(source, excludes=params.get("excludes"), progress=ctx.tick, cancelled=ctx.cancelled):
-        ctx.check_cancel()
-        try:
-            total_bytes += entry.stat().st_size   # Windows 上零系统调用
-        except OSError:
-            continue
-        files.append(Path(entry.path))
+    for root, prefix in zip(roots, prefixes):
+        for entry in fsutil.iter_entries(root, excludes=params.get("excludes"),
+                                         progress=ctx.tick, cancelled=ctx.cancelled):
+            ctx.check_cancel()
+            try:
+                total_bytes += entry.stat().st_size   # Windows 上零系统调用
+            except OSError:
+                continue
+            path = Path(entry.path)
+            try:
+                rel = path.relative_to(root)
+            except ValueError:
+                rel = Path(path.name)
+            arc = f"{prefix}/{str(rel).replace(chr(92), '/')}"
+            files.append((path, arc))
 
     free = fsutil.disk_free(destination)
     # 压缩后一般远小于原体积，留 20% 余量做保守估计
@@ -54,18 +69,18 @@ def run_backup(ctx: JobContext) -> dict:
             f"目标盘空间可能不足：待压缩 {fsutil.format_size(total_bytes)}，可用 {fsutil.format_size(free)}"
         )
 
-    archive = destination / f"{source.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    base = source.name if not multi else f"{source.name}等{len(roots)}处"
+    archive = destination / f"{base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
     partial = archive.with_suffix(".partial.zip")
     ctx.phase(4, "正在写入压缩包")
 
     errors: list[str] = []
     try:
         with zipfile.ZipFile(partial, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-            for index, path in enumerate(files, start=1):
+            for index, (path, arc) in enumerate(files, start=1):
                 ctx.check_cancel()
                 ctx.progress(f"正在压缩 {path.name}", index, len(files), str(path))
                 try:
-                    arc = path.relative_to(source.parent)
                     if path.suffix.lower() in config.NON_COMPRESSIBLE_EXTS:
                         # 媒体/压缩容器本来就是压缩编码，再 deflate 一次不省体积、却慢好几倍
                         # （实测 72MB 的 mp4：deflate 6 花 3.13s，STORED 只要 0.43s，产物一样大）
@@ -94,6 +109,9 @@ def run_backup(ctx: JobContext) -> dict:
 
     return {
         "source": str(source),
+        "source_dirs": [str(root) for root in roots],
+        "source_count": len(roots),
+        "notes": notes,
         "zip_path": str(archive),
         "file_count": len(files),
         "source_size": total_bytes,

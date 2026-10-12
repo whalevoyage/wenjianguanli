@@ -12,7 +12,7 @@ import { formatCount } from '../utils/formatters'
 const { config, excludes, load: loadConfig } = useConfig()
 const { job, running, run, cancel, rollback } = useJob('backup')
 
-const source = ref('')
+const sources = ref([])
 const dest = ref('')
 
 const summary = computed(() => {
@@ -53,9 +53,10 @@ const summary = computed(() => {
 })
 
 async function start() {
-  if (!source.value.trim()) return
+  const sourceDirs = sources.value.map(p => p.trim()).filter(Boolean)
+  if (!sourceDirs.length) return
   await run(() => startBackup({
-    source_dir: source.value.trim(),
+    source_dirs: sourceDirs,
     dest_dir: dest.value.trim(),
     excludes: excludes.value,
   }))
@@ -71,11 +72,12 @@ onMounted(async () => {
 
     <section class="app-card panel-card">
       <TargetPicker
-        v-model:path="source"
+        :multiple="true"
+        v-model:paths="sources"
         v-model:excludes="excludes"
         :drives="config?.drives || []"
         label="备份目录"
-        placeholder="例如：D:\\MyProject"
+        placeholder="可多选：把多个目录打进同一个 ZIP"
       />
 
       <el-divider />

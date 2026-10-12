@@ -137,7 +137,8 @@ class ProjectRequest(BaseModel):
 
 
 class MigrateRequest(BaseModel):
-    source_dir: str
+    source_dir: str = ""
+    source_dirs: list[str] | None = None
     target_dir: str
     excludes: list[str] | None = None
     dry_run: bool = True
@@ -162,7 +163,8 @@ class CleanRequest(BaseModel):
 
 
 class BackupRequest(BaseModel):
-    source_dir: str
+    source_dir: str = ""
+    source_dirs: list[str] | None = None
     dest_dir: str = ""
     excludes: list[str] | None = None
 
@@ -472,10 +474,14 @@ def start_project_scan(request: ProjectRequest):
 @app.post("/api/migrate")
 def start_migrate(request: MigrateRequest):
     try:
-        source = fsutil.resolve_dir(request.source_dir)
+        roots, _ = fsutil.resolve_sources(
+            {"paths": request.source_dirs or [], "source_dir": request.source_dir}
+        )
     except (OSError, ValueError) as exc:
         raise _friendly(exc)
-    title = ("规划迁移 " if request.dry_run else "执行迁移 ") + f"{source} → {request.target_dir}"
+    source = roots[0]
+    suffix = "" if len(roots) == 1 else f" 等 {len(roots)} 个来源"
+    title = ("规划迁移 " if request.dry_run else "执行迁移 ") + f"{source}{suffix} → {request.target_dir}"
     return _launch("migrate", title, str(source), request.model_dump(), migrate.run_migrate)
 
 
@@ -489,10 +495,14 @@ def start_clean(request: CleanRequest):
 @app.post("/api/backup")
 def start_backup(request: BackupRequest):
     try:
-        source = fsutil.resolve_dir(request.source_dir)
+        roots, _ = fsutil.resolve_sources(
+            {"paths": request.source_dirs or [], "source_dir": request.source_dir}
+        )
     except (OSError, ValueError) as exc:
         raise _friendly(exc)
-    return _launch("backup", f"备份 {source}", str(source), request.model_dump(), backup.run_backup)
+    source = roots[0]
+    suffix = "" if len(roots) == 1 else f" 等 {len(roots)} 个来源"
+    return _launch("backup", f"备份 {source}{suffix}", str(source), request.model_dump(), backup.run_backup)
 
 
 @app.post("/api/backup/verify")

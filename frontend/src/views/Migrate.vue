@@ -18,14 +18,16 @@ const { config, excludes, load: loadConfig } = useConfig()
 const plan = useJob('migrate.plan')
 const execute = useJob('migrate.execute')
 
-const source = ref('')
+const sources = ref([])
 /* 搬完之后的去处：这一页也是"清单型"页面，不该是路的尽头 */
 const nextSteps = [
   { name: 'space', label: '空间地图' },
   { name: 'duplicates', label: '查重' },
 ]
-/* 跨页接力：从别的页面带着目录过来时，直接填好这个框（不自动开跑） */
-const { handed, from } = useHandoffTarget(source)
+/* 跨页接力：从别的页面带着目录过来时，追加进列表（不自动开跑） */
+const { handed, from } = useHandoffTarget(sources, { multiple: true })
+/* 反向接力 / 单值展示用一个主来源即可 */
+const primarySource = computed(() => sources.value[0] || '')
 const target = ref('')
 const mode = ref('move')
 const createJunction = ref(false)
@@ -90,13 +92,14 @@ const planColumns = [
 ]
 
 async function makePlan() {
-  if (!source.value.trim() || !target.value.trim()) {
+  const sourceDirs = sources.value.map(p => p.trim()).filter(Boolean)
+  if (!sourceDirs.length || !target.value.trim()) {
     ElMessage.warning('请填写源目录和目标目录')
     return
   }
   planResult.value = null
   await plan.run(() => startMigrate({
-    source_dir: source.value.trim(),
+    source_dirs: sourceDirs,
     target_dir: target.value.trim(),
     excludes: excludes.value,
     dry_run: true,
@@ -109,7 +112,7 @@ async function runMigration() {
   if (!planResult.value?.plan?.length) return
   const items = planResult.value.plan.map(item => ({ source: item.source, target: item.target, size: item.size }))
   const job = await execute.run(() => startMigrate({
-    source_dir: source.value.trim(),
+    source_dirs: sources.value.map(p => p.trim()).filter(Boolean),
     target_dir: target.value.trim(),
     dry_run: false,
     mode: mode.value,
@@ -137,11 +140,12 @@ onMounted(async () => {
       <HandoffNote v-if="handed" :path="handed" :from="from" @dismiss="handed = ''" />
 
       <TargetPicker
-        v-model:path="source"
+        :multiple="true"
+        v-model:paths="sources"
         v-model:excludes="excludes"
         :drives="config?.drives || []"
         label="源目录"
-        placeholder="例如：C:\\Users\\me\\Videos"
+        placeholder="可多选：把多个来源一起搬到同一个目标"
       />
 
       <el-divider />
@@ -213,7 +217,7 @@ onMounted(async () => {
       </section>
     </template>
 
-    <NextSteps v-if="source" :path="source" origin="migrate" :steps="nextSteps" />
+    <NextSteps v-if="primarySource" :path="primarySource" origin="migrate" :steps="nextSteps" />
 
     <section v-if="execute.job.value" class="app-card panel-card">
       <div class="panel-title-row">

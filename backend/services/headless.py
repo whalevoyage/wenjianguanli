@@ -39,6 +39,9 @@ class HeadlessContext:
     def add_actions(self, *_args, **_kwargs) -> None:
         return None
 
+    def set_plan(self, *_args, **_kwargs) -> None:
+        return None
+
     def waiting(self, *_args, **_kwargs) -> None:
         return None
 

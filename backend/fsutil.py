@@ -433,6 +433,27 @@ def source_of(path: Path | str, roots: list[Path]) -> str:
     return str(roots[0]) if roots else ""
 
 
+def source_prefixes(roots: list[Path]) -> list[str]:
+    """多来源时每个来源在「目标 / ZIP 内」占用的顶层目录名。
+
+    用来源目录名；两个来源重名时后面的加序号（`A` / `A_2`），避免顶层目录互撞。
+    单来源调用时通常传 `[root]`，得到 `[root.name]` —— 与旧的
+    `path.relative_to(root.parent)`（顶层即来源目录名）语义一致。
+    """
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for root in roots:
+        name = root.name or str(root).replace(":", "").strip("\\/") or "source"
+        key = name.lower()
+        if key in seen:
+            seen[key] += 1
+            name = f"{name}_{seen[key]}"
+        else:
+            seen[key] = 0
+        out.append(name)
+    return out
+
+
 def _path_contains(parent: Path, child: Path) -> bool:
     """parent 是不是 child 本身或它的祖先（按路径字符串比，不碰磁盘）。"""
     head = str(parent).rstrip("\\/").lower()
