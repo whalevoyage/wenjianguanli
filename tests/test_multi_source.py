@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend import fsutil
-from backend.services import duplicates, junk, scan, similar
+from backend.services import duplicates, index, junk, projects, scan, similar
 
 
 class StubCtx:
@@ -241,6 +241,54 @@ def test_endpoint_other_three_paths_only(tmp_path: Path):
         assert captured["params"].get("paths") == [str(a), str(b)], fn.__name__
 
 
+# ---------------------------------------------------------------------------
+# 第二批：项目雷达 / 全文检索 接多来源
+# ---------------------------------------------------------------------------
+
+def test_projects_multi(tmp_path: Path):
+    a = tmp_path / "a"; a.mkdir()
+    b = tmp_path / "b"; b.mkdir()
+    for name, base in (("A", a), ("B", b)):
+        proj = base / f"proj_{name}"
+        proj.mkdir()
+        (proj / "package.json").write_text("{}", encoding="utf-8")
+        (proj / "code.py").write_text("print(1)", encoding="utf-8")
+    res = projects.run_project_scan(_ctx({"paths": [str(a), str(b)]}))
+    assert res["source_count"] == 2
+    assert set(res["roots"]) == {str(a), str(b)}
+    assert res["project_count"] == 2
+    # 每条项目都带来源标记，且两个来源各出一个
+    assert {row["source"] for row in res["projects"]} == {str(a), str(b)}
+
+
+def test_index_multi(tmp_path: Path):
+    a = tmp_path / "a"; a.mkdir()
+    b = tmp_path / "b"; b.mkdir()
+    (a / "note.txt").write_text("hello index", encoding="utf-8")
+    (b / "doc.md").write_text("# title", encoding="utf-8")
+    res = index.run_index(_ctx({"paths": [str(a), str(b)]}))
+    assert res["source_count"] == 2
+    assert set(res["roots"]) == {str(a), str(b)}
+    assert res["total_files"] == 2
+    assert len(res.get("per_root", [])) == 2
+
+
+def test_endpoint_projects_and_search_paths_only(tmp_path: Path):
+    captured = _stub_launch()
+    from backend import main
+    a = tmp_path / "a"; a.mkdir()
+    b = tmp_path / "b"; b.mkdir()
+    for fn, req in (
+        (main.start_project_scan, main.ProjectRequest),
+        (main.start_search_index, main.SearchIndexRequest),
+    ):
+        captured.clear()
+        fn(req(paths=[str(a), str(b)]))
+        assert "个来源" in captured["title"], fn.__name__
+        assert captured["target"] == str(a), fn.__name__
+        assert captured["params"].get("paths") == [str(a), str(b)], fn.__name__
+
+
 if __name__ == "__main__":
     import tempfile
     import shutil
@@ -271,6 +319,9 @@ if __name__ == "__main__":
     _run("t10", test_endpoint_scan_single_path_backcompat)
     _run("t11", test_endpoint_scan_bad_path_400)
     _run("t12", test_endpoint_other_three_paths_only)
+    _run("t13", test_projects_multi)
+    _run("t14", test_index_multi)
+    _run("t15", test_endpoint_projects_and_search_paths_only)
     shutil.rmtree(tmp, ignore_errors=True)
     print("FAILS:", fails)
     sys.exit(1 if fails else 0)

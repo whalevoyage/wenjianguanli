@@ -106,18 +106,15 @@ def _read_text(path: str, size: int) -> str | None:
 # 建 / 更新索引（Job）
 # ---------------------------------------------------------------------------
 
-def run_index(ctx: JobContext) -> dict:
-    """对一个目录建立或更新检索索引。**只读取文件**，不移动不删除任何东西。"""
-    params = ctx.params
-    root = fsutil.resolve_dir(params.get("path", ""))
-    excludes = params.get("excludes")
-    max_depth = params.get("max_depth") or 0
-    root_id = str(root)
-    started = time.perf_counter()
+def _index_one_root(ctx: JobContext, root, excludes, max_depth: int, label: str) -> dict:
+    """给单个根建 / 更新索引，返回该根的明细。
 
-    ctx.phase(0, f"正在读取 {root} 的现有索引")
+    索引是**按 root_id 分桶**的（search_root 一张表存多个根），所以多来源时逐个根各跑一遍，
+    每个根仍管自己的 state / 自己的 root_id —— 这样「移除某个根」依旧只影响那个根。
+    """
+    root_id = str(root)
+    ctx.phase(0, f"{label}正在读取 {root} 的现有索引")
     state = database.search_state(config.DATABASE_FILE, root_id)
-    enabled = database.search_available(config.DATABASE_FILE)
 
     records: list[dict] = []
     seen: set[str] = set()
@@ -170,27 +167,58 @@ def run_index(ctx: JobContext) -> dict:
         if len(records) >= _BATCH:
             database.search_apply(config.DATABASE_FILE, root_id, str(root), records, [], fsutil.now_iso())
             records = []
-            ctx.phase(1, f"正在写入索引 —— 新增 {added} · 更新 {updated} · 跳过 {skipped}")
+            ctx.phase(1, f"{label}正在写入索引 —— 新增 {added} · 更新 {updated} · 跳过 {skipped}")
 
     # 索引里有、这一轮没见到的 = 文件已被删/移走
     gone = [path for path in state if path not in seen]
 
-    ctx.phase(1, "正在落盘")
+    ctx.phase(1, f"{label}正在落盘")
     database.search_apply(config.DATABASE_FILE, root_id, str(root), records, gone, fsutil.now_iso())
-
-    duration = round(time.perf_counter() - started, 2)
     return {
         "root": str(root),
-        "indexed_at": fsutil.now_iso(),
         "added": added,
         "updated": updated,
         "skipped": skipped,
         "removed": len(gone),
         "text_files": text_files,
         "total_files": len(seen),
-        "duration_seconds": duration,
         "truncated": truncated,
+    }
+
+
+def run_index(ctx: JobContext) -> dict:
+    """对一个或多个目录建立 / 更新检索索引。**只读取文件**，不移动不删除任何东西。"""
+    params = ctx.params
+    roots, notes = fsutil.resolve_sources(params)
+    excludes = params.get("excludes")
+    max_depth = params.get("max_depth") or 0
+    enabled = database.search_available(config.DATABASE_FILE)
+    started = time.perf_counter()
+
+    per_root: list[dict] = []
+    for index, root in enumerate(roots):
+        if ctx.cancelled():
+            break
+        label = "" if len(roots) == 1 else f"[{index + 1}/{len(roots)}] "
+        per_root.append(_index_one_root(ctx, root, excludes, max_depth, label))
+
+    duration = round(time.perf_counter() - started, 2)
+    return {
+        "root": str(roots[0]),
+        "roots": [str(root) for root in roots],
+        "source_count": len(roots),
+        "notes": notes,
+        "indexed_at": fsutil.now_iso(),
+        "added": sum(item["added"] for item in per_root),
+        "updated": sum(item["updated"] for item in per_root),
+        "skipped": sum(item["skipped"] for item in per_root),
+        "removed": sum(item["removed"] for item in per_root),
+        "text_files": sum(item["text_files"] for item in per_root),
+        "total_files": sum(item["total_files"] for item in per_root),
+        "duration_seconds": duration,
+        "truncated": any(item["truncated"] for item in per_root),
         "search_enabled": enabled,
+        "per_root": per_root,
     }
 
 

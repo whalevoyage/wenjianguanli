@@ -25,9 +25,11 @@ const CHART_LIMIT = 80
 const { config, excludes, load: loadConfig } = useConfig()
 const scan = useJob('projects')
 
-const path = ref('')
-/* 跨页接力：从别的页面带着目录过来时，直接填好这个框（不自动开跑） */
-const { handed, from } = useHandoffTarget(path)
+const paths = ref([])
+/* 跨页接力：从别的页面带着目录过来时，追加进列表（不自动开跑） */
+const { handed, from } = useHandoffTarget(paths, { multiple: true })
+/* 反向接力只用一个主目录即可 */
+const primaryPath = computed(() => paths.value[0] || '')
 
 /**
  * 结果之后能干什么。
@@ -146,7 +148,8 @@ function pick(pathValue) {
 }
 
 async function runScan() {
-  if (!path.value.trim()) {
+  const targets = paths.value.map(p => p.trim()).filter(Boolean)
+  if (!targets.length) {
     ElMessage.warning('请先选择要扫描的目录')
     return
   }
@@ -154,7 +157,7 @@ async function runScan() {
   onlyZombie.value = false
   picked.value = ''
   const job = await scan.run(() => startProjectScan({
-    path: path.value.trim(),
+    paths: targets,
     excludes: excludes.value,
     zombie_days: Number(zombieDays.value) || 180,
     max_depth: Number(maxDepth.value) || 0,
@@ -180,11 +183,12 @@ onMounted(async () => {
       <HandoffNote v-if="handed" :path="handed" :from="from" @dismiss="handed = ''" />
 
       <TargetPicker
-        v-model:path="path"
+        :multiple="true"
+        v-model:paths="paths"
         v-model:excludes="excludes"
         :drives="config?.drives || []"
         label="要扫描的目录"
-        placeholder="例如：D:\\"
+        placeholder="可多选：一次扫多个来源"
       />
 
       <el-divider />
@@ -227,7 +231,7 @@ onMounted(async () => {
         <StatCard v-for="item in summary" :key="item.title" v-bind="item" />
       </section>
 
-      <NextSteps :path="path" origin="projects" :steps="nextSteps" />
+      <NextSteps :path="primaryPath" origin="projects" :steps="nextSteps" />
 
       <section class="app-card panel-card">
         <div class="panel-title-row">

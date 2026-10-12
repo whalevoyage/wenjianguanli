@@ -21,39 +21,19 @@ def _fmt_time(ts: float) -> str:
     return fsutil.format_date(ts)
 
 
-def run_project_scan(ctx: JobContext) -> dict:
-    params = ctx.params
-    root = fsutil.resolve_dir(params.get("path", ""))
-    excludes = params.get("excludes")
-    max_depth = int(params.get("max_depth") or 0)
-    zombie_days = int(params.get("zombie_days") or config.ZOMBIE_DAYS)
-    limit = int(params.get("limit") or config.PROJECT_LIMIT)
+def _scan_root(ctx: JobContext, root, exclude_set: set[str], max_depth: int,
+               grand: int | None, start_offset: int) -> tuple[dict, list, int, bool]:
+    """遍历一个根，返回 `(projects, warnings, scanned, truncated)`。
 
-    exclude_set = set(config.DEFAULT_EXCLUDES) | set(config.IMPLICIT_EXCLUDES)
-    if excludes is not None:
-        exclude_set = set(excludes) | set(config.IMPLICIT_EXCLUDES)
-
-    started = time.perf_counter()
-    now = time.time()
-    zombie_cutoff = now - zombie_days * 86400
-    root_path = root.resolve()
-    root_str = str(root_path)
-
+    与单源版本的差别只有进度口径：分母用**全局** `grand`、已扫条目数带上 `start_offset`，
+    这样多来源时百分比是接起来单调涨的，而不是每换一个根就归零重跳。
+    条目预算同样是全局的（`start_offset + scanned` 对 `SCAN_ENTRY_LIMIT`），不会变成 N×。
+    """
     projects: dict[str, dict] = {}
     warnings: list[str] = []
-    scanned_files = 0
+    scanned = 0
     truncated = False
-
-    ctx.phase(0, f"正在识别 {root} 下的项目")
-
-    # 先数一遍：只枚举目录、不做逐文件 stat，用来给进度算百分比。
-    # 不带这一步，进度就只能永远是 0%（前端看到的正是「17 分钟 0%」）。
-    # 计数本身也报进度 —— 大目录上它也要跑一会儿，不能静默。
-    total_files = fsutil.count_entries(
-        root, excludes=excludes, max_depth=max_depth, cancelled=ctx.cancelled,
-        progress=lambda _msg, done, _total, where: ctx.progress("正在统计条目数（用于进度）", done, None, where),
-    )
-    total_files = total_files or None
+    root_str = str(root.resolve())
 
     # 主遍历：用 os.scandir 而不是 os.walk —— 关键在于 entry.stat()。
     # Windows 上目录列表本身就带回了 size/mtime，DirEntry.stat() 直接复用、**不需要系统调用**；
@@ -87,6 +67,7 @@ def run_project_scan(ctx: JobContext) -> dict:
                 "name": os.path.basename(current) or current,
                 "shell": marker,
                 "rel": rel,
+                "source": str(root),
                 "depth": depth,
                 "size": 0,
                 "file_count": 0,
@@ -116,12 +97,12 @@ def run_project_scan(ctx: JobContext) -> dict:
                 stack.append((entry.path, depth + 1, owner))
                 continue
 
-            scanned_files += 1
-            if scanned_files > config.SCAN_ENTRY_LIMIT:
+            scanned += 1
+            if start_offset + scanned > config.SCAN_ENTRY_LIMIT:
                 truncated = True
                 break
-            if scanned_files % 200 == 0:
-                ctx.progress("正在统计项目占用", scanned_files, total_files, current)
+            if (start_offset + scanned) % 200 == 0:
+                ctx.progress("正在统计项目占用", start_offset + scanned, grand, current)
             if not owner:
                 continue
 
@@ -142,6 +123,53 @@ def run_project_scan(ctx: JobContext) -> dict:
 
         if truncated:
             break
+
+    return projects, warnings, scanned, truncated
+
+
+def run_project_scan(ctx: JobContext) -> dict:
+    params = ctx.params
+    roots, notes = fsutil.resolve_sources(params)
+    excludes = params.get("excludes")
+    max_depth = int(params.get("max_depth") or 0)
+    zombie_days = int(params.get("zombie_days") or config.ZOMBIE_DAYS)
+    limit = int(params.get("limit") or config.PROJECT_LIMIT)
+
+    exclude_set = set(config.DEFAULT_EXCLUDES) | set(config.IMPLICIT_EXCLUDES)
+    if excludes is not None:
+        exclude_set = set(excludes) | set(config.IMPLICIT_EXCLUDES)
+
+    started = time.perf_counter()
+    now = time.time()
+    zombie_cutoff = now - zombie_days * 86400
+
+    # 先数一遍所有来源的条目总数：进度分母用**全局**。
+    # 不带这一步，进度就永远是 0%；而逐个根各数一次会让百分比每换根就回退。
+    # 计数本身也报进度 —— 大目录上它也要跑一会儿，不能静默。
+    totals: list[int] = []
+    for root in roots:
+        if ctx.cancelled():
+            break
+        totals.append(fsutil.count_entries(
+            root, excludes=excludes, max_depth=max_depth, cancelled=ctx.cancelled,
+            progress=lambda _msg, done, _total, where: ctx.progress("正在统计条目数（用于进度）", done, None, where),
+        ) or 0)
+    grand = sum(totals) or None
+
+    projects: dict[str, dict] = {}
+    warnings: list[str] = []
+    scanned_files = 0
+    truncated = False
+
+    for root in roots:
+        if ctx.cancelled() or truncated:
+            break
+        ctx.phase(0, fsutil.sources_phrase("正在识别项目", roots))
+        part, warns, count, cut = _scan_root(ctx, root, exclude_set, max_depth, grand, scanned_files)
+        projects.update(part)
+        warnings.extend(warns)
+        scanned_files += count
+        truncated = truncated or cut
 
     ctx.phase(1, "正在汇总项目清单")
 
@@ -172,6 +200,7 @@ def run_project_scan(ctx: JobContext) -> dict:
             "name": record["name"],
             "rel": record["rel"],
             "shell": record["shell"],
+            "source": record.get("source", ""),
             "depth": record["depth"],
             "size": size,
             "size_text": fsutil.format_size(size),
@@ -192,7 +221,10 @@ def run_project_scan(ctx: JobContext) -> dict:
 
     duration = round(time.perf_counter() - started, 2)
     return {
-        "root": str(root),
+        "root": str(roots[0]),
+        "roots": [str(root) for root in roots],
+        "source_count": len(roots),
+        "notes": notes,
         "zombie_days": zombie_days,
         "project_count": len(rows),
         "projects": rows[:limit],

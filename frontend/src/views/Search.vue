@@ -54,9 +54,11 @@ function segments(text) {
 const { config, excludes, load: loadConfig } = useConfig()
 const { job, running, run, cancel } = useJob('search.index')
 
-const path = ref('')
-/* 跨页接力：从别的页面带着目录过来时直接填好（不自动开跑） */
-const { handed, from } = useHandoffTarget(path)
+const paths = ref([])
+/* 跨页接力：从别的页面带着目录过来时，追加进列表（不自动开跑） */
+const { handed, from } = useHandoffTarget(paths, { multiple: true })
+/* 反向接力只用一个主目录即可 */
+const primaryPath = computed(() => paths.value[0] || '')
 
 const keyword = ref('')
 const status = ref({ enabled: true, roots: [], total_files: 0 })
@@ -74,7 +76,7 @@ const nextSteps = [
 /* 按钮灰着必须说明原因（契约：不许干灰着） */
 const indexHint = computed(() => {
   if (!status.value.enabled) return '当前构建不支持全文索引（SQLite 缺少 FTS5）。'
-  if (!path.value.trim()) return '先选一个要建立索引的目录。'
+  if (!paths.value.some(p => p.trim())) return '先选一个要建立索引的目录。'
   return '把文件名与正文建进本地索引 —— 只读取文件，不移动、不删除任何东西。'
 })
 
@@ -102,7 +104,7 @@ const rows = computed(() => (result.value?.results || []).map(item => ({
   snippetParts: segments(item.snippet),
 })))
 
-const canIndex = computed(() => Boolean(path.value.trim()) && status.value.enabled && !running.value)
+const canIndex = computed(() => paths.value.some(p => p.trim()) && status.value.enabled && !running.value)
 const canSearch = computed(() => Boolean(keyword.value.trim()) && Boolean(status.value.total_files) && !searching.value)
 
 async function loadStatus() {
@@ -115,8 +117,9 @@ async function loadStatus() {
 
 async function buildIndex() {
   if (!canIndex.value) return
+  const targets = paths.value.map(p => p.trim()).filter(Boolean)
   await run(() => startSearchIndex({
-    path: path.value.trim(),
+    paths: targets,
     excludes: excludes.value,
   }))
 }
@@ -174,11 +177,12 @@ onMounted(async () => {
       </div>
 
       <TargetPicker
-        v-model:path="path"
+        :multiple="true"
+        v-model:paths="paths"
         v-model:excludes="excludes"
         :drives="config?.drives || []"
         label="要索引的目录"
-        placeholder="例如：D:\\Workspace"
+        placeholder="可多选：一次给多个目录建索引"
       />
 
       <div class="row-actions">
@@ -264,7 +268,7 @@ onMounted(async () => {
     </section>
 
     <template v-if="result">
-      <NextSteps v-if="path" :path="path" origin="search" :steps="nextSteps" />
+      <NextSteps v-if="primaryPath" :path="primaryPath" origin="search" :steps="nextSteps" />
 
       <section v-if="rows.length" class="app-card panel-card">
         <div class="panel-title-row">

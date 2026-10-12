@@ -69,8 +69,9 @@ class SimilarRequest(BaseModel):
 
 
 class SearchIndexRequest(BaseModel):
-    """建立 / 更新检索索引。max_depth=0 表示不限深度。"""
-    path: str
+    """建立 / 更新检索索引。max_depth=0 表示不限深度。可多来源（paths）。"""
+    path: str = ""
+    paths: list[str] | None = None
     excludes: list[str] | None = None
     max_depth: int = Field(default=0, ge=0)
 
@@ -127,7 +128,8 @@ class VirtualExportRequest(BaseModel):
 
 
 class ProjectRequest(BaseModel):
-    path: str
+    path: str = ""
+    paths: list[str] | None = None
     excludes: list[str] | None = None
     max_depth: int = Field(default=0, ge=0, le=50)
     zombie_days: int = Field(default=config.ZOMBIE_DAYS, ge=0, le=36500)
@@ -453,12 +455,14 @@ def export_virtual(request: VirtualExportRequest):
 
 @app.post("/api/projects/scan")
 def start_project_scan(request: ProjectRequest):
-    """项目雷达：识别项目目录，统计体积与活跃度，只读。"""
+    """项目雷达：识别项目目录，统计体积与活跃度，只读。可多来源（paths）。"""
     try:
-        root = fsutil.resolve_dir(request.path)
+        roots, _ = fsutil.resolve_sources(request.model_dump())
     except (OSError, ValueError) as exc:
         raise _friendly(exc)
-    return _launch("projects", f"项目雷达 {root}", str(root), request.model_dump(), projects.run_project_scan)
+    root = roots[0]
+    suffix = "" if len(roots) == 1 else f" 等 {len(roots)} 个来源"
+    return _launch("projects", f"项目雷达 {root}{suffix}", str(root), request.model_dump(), projects.run_project_scan)
 
 
 # ---------------------------------------------------------------------------
@@ -582,16 +586,18 @@ def compare_scan_snapshots(request: SnapshotCompareRequest):
 
 @app.post("/api/search/index")
 def start_search_index(request: SearchIndexRequest):
-    """为一个目录建立 / 更新检索索引。
+    """为一个或多个目录建立 / 更新检索索引。
 
     **只读用户文件**，不移动不删除任何东西；索引库写在项目自己的状态目录里，
     属于内部状态而非用户文件，所以「只读」档也放行。
     """
     try:
-        root = fsutil.resolve_dir(request.path)
+        roots, _ = fsutil.resolve_sources(request.model_dump())
     except (OSError, ValueError) as exc:
         raise _friendly(exc)
-    return _launch("index", f"建立索引 {root}", str(root), request.model_dump(), index.run_index)
+    root = roots[0]
+    suffix = "" if len(roots) == 1 else f" 等 {len(roots)} 个来源"
+    return _launch("index", f"建立索引 {root}{suffix}", str(root), request.model_dump(), index.run_index)
 
 
 @app.get("/api/search")

@@ -436,6 +436,49 @@ def main() -> int:
         check("缺失备份如实报错（400 而非 500）", "400" in str(exc), str(exc)[:70])
     shutil.rmtree(bkdir, ignore_errors=True)
 
+    # ---- 多来源（B8：四页 + 检索 / 项目雷达）----
+    print("\n[多来源]")
+    msa = fixture.parent / "filepilot_smoke_ms_a"
+    msb = fixture.parent / "filepilot_smoke_ms_b"
+    for p in (msa, msb):
+        shutil.rmtree(p, ignore_errors=True)
+    (msa / "proj_a").mkdir(parents=True)
+    (msb / "proj_b").mkdir(parents=True)
+    (msa / "proj_a" / "package.json").write_text("{}", encoding="utf-8")
+    (msb / "proj_b" / "package.json").write_text("{}", encoding="utf-8")
+    payload = "cross source duplicate payload\n"
+    (msa / "same.txt").write_text(payload, encoding="utf-8")
+    (msb / "same.txt").write_text(payload, encoding="utf-8")
+
+    job = wait_job(call("POST", "/duplicates/scan", {"paths": [str(msa), str(msb)]})["job_id"])
+    check("多源查重完成", job.get("status") == "done", job.get("error") or "")
+    res = job.get("result") or {}
+    check("多源查重 source_count=2", res.get("source_count") == 2, str(res.get("source_count")))
+    cross = [g for g in res.get("groups", []) if g.get("cross_source")]
+    check("跨目录重复被识别且排最前",
+          bool(cross) and (res.get("groups") or [{}])[0].get("cross_source") is True,
+          f"{len(cross)} 组跨目录")
+
+    pj = wait_job(call("POST", "/projects/scan", {"paths": [str(msa), str(msb)]})["job_id"])
+    check("多源项目雷达完成", pj.get("status") == "done", pj.get("error") or "")
+    pres = pj.get("result") or {}
+    check("多源项目雷达识别到两个项目", pres.get("project_count") == 2 and pres.get("source_count") == 2,
+          f"项目 {pres.get('project_count')} / 来源 {pres.get('source_count')}")
+
+    ij = wait_job(call("POST", "/search/index", {"paths": [str(msa), str(msb)]})["job_id"])
+    check("多源建索引完成", ij.get("status") == "done", ij.get("error") or "")
+    ires = ij.get("result") or {}
+    check("多源建索引覆盖两个来源", ires.get("source_count") == 2 and len(ires.get("roots", [])) == 2,
+          str(ires.get("roots")))
+    st = call("GET", "/search/status")
+    ms_roots = [r for r in st.get("roots", []) if r.get("path") in (str(msa), str(msb))]
+    check("两个来源都进了索引状态", len(ms_roots) == 2, f"{len(ms_roots)} 个")
+    # 清理：把两个来源从索引里移除，别在测试库里留根
+    for p in (msa, msb):
+        call("POST", "/search/remove", {"path": str(p)})
+    for p in (msa, msb):
+        shutil.rmtree(p, ignore_errors=True)
+
     # ---- 迁移 ----
     print("\n[跨盘迁移]")
     target = fixture.parent / "filepilot_smoke_target"
