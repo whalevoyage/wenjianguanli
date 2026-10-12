@@ -987,3 +987,46 @@ B1 的索引建在 SQLite FTS5 上（`backend/services/index.py`）。踩到的�
 两个都没变就完全跳过（不重读文件、不动索引行）。已有条目要**一次性读进内存**再比对 ——
 逐文件查库是 O(n) 次 I/O，正是「哈希缓存别每文件读一遍写一遍」踩过的坑。
 收尾还要用"索引里有、本轮没见到"的差集把**已删/已移走**的条目清掉。
+
+---
+
+## 十九、★ 循环变量在循环外被用：`for root, entry in ...` 之后又拿 `root` 当"当前根"
+
+**症状（2026-10-12 用户实机截图）**：Agent 跑「释放空间（清理垃圾）」对一个**空目录**失败，
+报 `UnboundLocalError: cannot access local variable 'root' where it is not associated with a value`。
+
+**根因**：`services/junk.py` 的 `run_junk_scan` 里，主遍历是
+
+```python
+for root, entry in fsutil.iter_entries_multi(roots, ...):   # root 是循环变量！
+    ...
+```
+
+而后面「空文件夹」那一趟又写了 `if current_path == root:` 和 `fsutil.iter_entries(root, ...)`。
+两个后果：
+
+1. **目录里一个条目都没产出时（空目录 / 不可读）循环体一次都没进 → `root` 从未绑定 → 整个任务崩掉**；
+2. 多来源时循环结束后 `root` 只是**最后一个**来源，前面几个来源的空目录被**静默漏掉**
+   （B8 多来源改造埋下的隐患，比崩溃更难发现）。
+
+**修法**：按来源各建一个闭包，循环变量不外泄：
+
+```python
+def _make_empty_dir_collector(source_root: Path):
+    def _collect_empty_dir(current, _depth, raw_dirs, raw_files) -> None:
+        ...
+        if current_path == source_root:      # 每个来源跳过"自己"
+            return
+    return _collect_empty_dir
+
+for source_root in roots:                    # 空目录那趟也逐来源跑
+    for _ in fsutil.iter_entries(source_root, on_dir=_make_empty_dir_collector(source_root), ...):
+        pass
+```
+
+**教训（两条）**：
+- `for x, y in gen():` 里的 `x` **不是**"当前项所属的分组"，它只是循环变量；循环一次都没进时它**不存在**。
+  要在循环外用它，先给个默认值（`root = None`）或改成显式的分组结构。
+- 这类 bug 用 AST 静态扫不可靠（同名循环一大片误报）；**可靠的验收是写一个"空输入"回归测试**：
+  本次用 `tests/test_junk_scan.py` 三个用例（空目录不崩 / 多来源都扫到 / 来源根自身不算空目录），
+  并且**把 bug 版换回去确认三个全红、修复版三个全绿**——别只跑修复版就说"好了"。

@@ -116,33 +116,46 @@ def run_junk_scan(ctx: JobContext) -> dict:
     if "empty_dir" in enabled_rules:
         ctx.phase(1, "正在查找空文件夹")
 
-        def _collect_empty_dir(current: str, _depth: int, raw_dirs: list[str], raw_files: list[str]) -> None:
-            if raw_dirs or raw_files:
-                return
-            current_path = Path(current)
-            if current_path == root:
-                return
-            if fsutil.write_block_reason(current_path, permission) or fsutil.is_readonly_zone(current_path):
-                return
-            buckets["empty_dir"].append({
-                "name": current_path.name,
-                "path": str(current_path),
-                "size": 0,
-                "size_text": "0 B",
-                "level": "safe",
-                "rule": "empty_dir",
-                "is_dir": True,
-                "protected": False,
-            })
+        def _make_empty_dir_collector(source_root: Path):
+            """空目录收集器。**每个来源各建一个**，闭包捕获各自的根。
 
-        for _ in fsutil.iter_entries(
-            root,
-            excludes=[],                 # 只保留 IMPLICIT 排除：用户排除项不参与
-            on_dir=_collect_empty_dir,
-            skip_self_protected=False,   # 只读检测：自保护目录也要能进
-            cancelled=ctx.cancelled,
-        ):
-            pass
+            ★ 以前这里直接用主遍历的循环变量 `root`，有两个后果：
+              ① 主遍历一个条目都没产出时（目录为空 / 不可读），`root` 从未绑定，
+                 到这儿直接 `UnboundLocalError` 崩掉**整条任务**
+                 （2026-10-12 实测：扫一个桌面下的空目录，Agent 任务失败）；
+              ② 多来源时循环结束后 `root` 只是**最后一个**来源，
+                 前面几个来源的空目录被静默漏掉（B8 多来源埋下的隐患）。
+            """
+            def _collect_empty_dir(current: str, _depth: int, raw_dirs: list[str], raw_files: list[str]) -> None:
+                if raw_dirs or raw_files:
+                    return
+                current_path = Path(current)
+                if current_path == source_root:
+                    return
+                if fsutil.write_block_reason(current_path, permission) or fsutil.is_readonly_zone(current_path):
+                    return
+                buckets["empty_dir"].append({
+                    "name": current_path.name,
+                    "path": str(current_path),
+                    "size": 0,
+                    "size_text": "0 B",
+                    "level": "safe",
+                    "rule": "empty_dir",
+                    "is_dir": True,
+                    "protected": False,
+                })
+            return _collect_empty_dir
+
+        for source_root in roots:
+            ctx.check_cancel()
+            for _ in fsutil.iter_entries(
+                source_root,
+                excludes=[],                 # 只保留 IMPLICIT 排除：用户排除项不参与
+                on_dir=_make_empty_dir_collector(source_root),
+                skip_self_protected=False,   # 只读检测：自保护目录也要能进
+                cancelled=ctx.cancelled,
+            ):
+                pass
 
     ctx.phase(2, "正在汇总")
     levels: list[dict] = []
