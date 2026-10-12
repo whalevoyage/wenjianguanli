@@ -133,6 +133,10 @@ export const listAgentConversations = () => unwrap(api.get('/agent/conversations
 export const renameAgentConversation = (conversationId, title) =>
   unwrap(api.post(`/agent/conversations/${encodeURIComponent(conversationId)}/title`, { title }))
 
+/** 登记一个会话（空会话也落库），让「新建任务」后切走再回来还在列表里 */
+export const touchAgentConversation = conversationId =>
+  unwrap(api.post('/agent/conversations', { conversation_id: conversationId }))
+
 /**
  * 流式对话：逐块回调，返回一个「停止」函数。
  *

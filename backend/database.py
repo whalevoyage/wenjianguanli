@@ -423,6 +423,24 @@ def read_memory(path: Path, conversation_id: str, limit: int = 20) -> list[dict]
 def clear_memory(path: Path, conversation_id: str) -> None:
     with _lock, connect(path) as conn:
         conn.execute("DELETE FROM agent_memory WHERE conversation_id=?", (conversation_id,))
+        # 会话桶本身也删掉：只 touch 过的空会话在 agent_memory 里**没有行**，
+        # 不删 meta 的话它会永远赖在「历史对话」列表里，删不掉。
+        conn.execute("DELETE FROM agent_conversation_meta WHERE conversation_id=?", (conversation_id,))
+
+
+def touch_conversation(path: Path, conversation_id: str, updated_at: str) -> None:
+    """把一个（可能还是空的）会话登记进 meta 表，让它能出现在历史列表里。
+
+    已有自定义标题的会话**不动标题**，只更新时间 —— 不会把用户改过的名字冲掉。
+    """
+    if not conversation_id:
+        return
+    with _lock, connect(path) as conn:
+        conn.execute(
+            "INSERT INTO agent_conversation_meta(conversation_id,title,updated_at) VALUES(?,?,?) "
+            "ON CONFLICT(conversation_id) DO UPDATE SET updated_at=excluded.updated_at",
+            (conversation_id, "", updated_at),
+        )
 
 
 def set_conversation_title(path: Path, conversation_id: str, title: str, updated_at: str) -> None:
@@ -442,8 +460,15 @@ def list_conversations(path: Path, limit: int = 50) -> list[dict]:
     """列出所有会话桶（按最近活跃倒序）。标题优先用自定义的，否则取该会话第一条用户消息。"""
     with _lock, connect(path) as conn:
         rows = conn.execute(
+            # 第二段把「只 touch 过、还没发消息」的空会话也并进来 ——
+            # 否则「新建任务」后切走再回来，后端列表里根本找不到它，
+            # 只有 localStorage 里那条 id 在（清掉缓存就彻底丢了）。
             "SELECT conversation_id, COUNT(*) AS count, MIN(created_at) AS created_at, MAX(created_at) AS updated_at "
-            "FROM agent_memory GROUP BY conversation_id ORDER BY updated_at DESC LIMIT ?",
+            "FROM agent_memory GROUP BY conversation_id "
+            "UNION ALL "
+            "SELECT conversation_id, 0, '', updated_at FROM agent_conversation_meta "
+            "WHERE conversation_id NOT IN (SELECT conversation_id FROM agent_memory) "
+            "ORDER BY updated_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
         custom = {

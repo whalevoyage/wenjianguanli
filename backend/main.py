@@ -188,6 +188,10 @@ class ConversationTitleRequest(BaseModel):
     title: str = Field(default="", max_length=60)
 
 
+class ConversationTouchRequest(BaseModel):
+    conversation_id: str = ""
+
+
 class CancelJobRequest(BaseModel):
     """取消任务时带上调用来源，写进审计日志，便于事后追溯。"""
     reason: str = ""
@@ -733,6 +737,12 @@ def list_agent_conversations():
 def rename_agent_conversation(conversation_id: str, request: ConversationTitleRequest):
     """重命名会话；传空标题则退回按首条消息自动生成。"""
     return agent.set_conversation_title(conversation_id, request.title)
+
+
+@app.post("/api/agent/conversations")
+def touch_agent_conversation(request: ConversationTouchRequest):
+    """登记一个会话（哪怕还是空的），让它立刻出现在历史列表里。"""
+    return agent.touch_conversation(request.conversation_id)
 
 
 @app.post("/api/agent/chat/stream")

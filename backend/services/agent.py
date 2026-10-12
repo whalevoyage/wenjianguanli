@@ -277,6 +277,18 @@ def clear_memory(conversation_id: str) -> None:
     store.clear_conversation_state(conversation_id)
 
 
+def touch_conversation(conversation_id: str) -> dict:
+    """把（可能还是空的）会话登记进历史列表。
+
+    空会话以前要等第一条消息才落库，于是「新建任务」后切走再回来，
+    后端列表里找不到它（只剩 localStorage 里那个 id）。零 token、纯本地。
+    """
+    if not conversation_id:
+        return {"ok": False}
+    database.touch_conversation(config.DATABASE_FILE, conversation_id, fsutil.now_iso())
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # 用户偏好记忆（第五阶段）
 #

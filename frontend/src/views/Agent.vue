@@ -38,6 +38,7 @@ import {
   renameAgentConversation,
   restoreTrash,
   reviseAgentPlan,
+  touchAgentConversation,
   reviseAgentTask,
   rollbackJob,
   saveAgentPrefs,
@@ -874,6 +875,8 @@ function newConversation() {
   const id = newConversationId()
   conversationId.value = id
   persistConversation(id)
+  // 空会话也立刻落库：以前要等第一条消息才进列表，「新建任务」后切走再回来就找不到了
+  touchAgentConversation(id).catch(() => {})
   resetView()
   // 新对话是空槽位：把上一个对话的任务卡清掉（任务本身照旧在后台跑）
   job.restore()

@@ -71,14 +71,16 @@ const progressPercent = computed(() => {
 /**
  * 「没有总数」的阶段：百分比无从算起，所以**不摆一个死数字**。
  *
- * 最典型的是预热统计（`iter_entries` 先数一遍才能算百分比）——
- * 那一段可能几十秒，而且**必然**是 0%。这时候进度条走不确定态，
- * 右边只留实时在走的秒数，真正在动的信息由 message 里的「已数 N 项」承担。
+ * 两种来源：
+ *   ① 预热统计（`iter_entries` 先数一遍才能算百分比）—— `!total` 且 percent 还是 0；
+ *   ② 后端显式声明这一步没法量化（Agent 多步任务里的 query / helper 步骤，`indeterminate`）。
+ *
+ * 共同处理：进度条走不确定态（来回扫动），右边只留实时在走的秒数，
+ * 真正在动的信息由 message 里的「已数 N 项 / 第 i/N 步」承担。
  */
 const unknownScope = computed(() => isRunning.value
   && props.job?.status === 'running'
-  && !props.job?.total
-  && progressPercent.value === 0)
+  && (props.job?.indeterminate || (!props.job?.total && progressPercent.value === 0)))
 
 /**
  * 「已运行」必须有一个**自己会走的时钟**。

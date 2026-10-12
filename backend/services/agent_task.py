@@ -55,26 +55,46 @@ class StepContext:
     def check_cancel(self) -> None:
         self._parent.check_cancel()
 
-    def _publish(self, message: str, fraction: float, path: str = "") -> None:
+    def _publish(self, message: str, fraction: float | None, path: str = "") -> None:
+        """上报当前步的进度。
+
+        `fraction` 为 `None` 表示「这一步没法量化」（query / helper 类步骤没有分母）。
+        这时**不编一个半步的假比例**，改为按「已完成几步」报百分比，并打上
+        `indeterminate` 让前端走不确定态（条子来回扫动 + 不显示死数字）——
+        真正在动的信息由 message 里的实时条目数/秒数承担。
+        有分母时才把真实比例折进当前步（`(已完成步 + 当前步比例) / 总步数`）。
+        """
+        title = self._step.get("title") or ""
+        text = f"第 {self._index + 1}/{self._total} 步 · {title}｜{message}"
+        if fraction is None:
+            percent = int(self._index / max(self._total, 1) * 100)
+            self._parent._manager.update(
+                self.job_id,
+                message=text,
+                percent=min(percent, 99),
+                current_path=path,
+                indeterminate=True,
+            )
+            return
         within = max(0.0, min(fraction, 0.99))
         percent = int((self._index + within) / self._total * 100)
         self._parent._manager.update(
             self.job_id,
-            message=f"第 {self._index + 1}/{self._total} 步 · {self._step.get('title')}｜{message}",
+            message=text,
             percent=min(percent, 99),
             current_path=path,
+            indeterminate=False,
         )
 
     def phase(self, index: int, message: str = "") -> None:
-        # 子服务的 phase 只是文字提示，进度比例仍由各自的上限决定
-        self._publish(message or "进行中", 0.1)
+        # 子服务的 phase 只是文字提示；没有分母，别硬凑比例
+        self._publish(message or "进行中", None)
 
     def progress(self, message: str, current: int, total: int | None = None, path: str = "") -> None:
-        fraction = 0.5
+        # 有 total 才是真实比例；没有就走不确定态（不写死 0.5 假装走到半步）
+        fraction = None
         if total:
             fraction = min(current / max(total, 1), 0.95)
-        elif current:
-            fraction = 0.5
         self._publish(message, fraction, path)
 
     def tick(self, message: str, current: int, total: int | None = None, path: str = "") -> None:
