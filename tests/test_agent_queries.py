@@ -50,6 +50,20 @@ def test_agent_can_open_other_atlas_tabs():
     assert result['params']['route'] == '/jobs'
 
 
+def test_agent_open_tab_hands_off_the_directory():
+    # 「打开扫描分析 D:\Downloads」要带着目录过去（目标页预填），不是开个空白页
+    result = agent.parse_local('打开扫描分析 D:\\Downloads')
+    assert result['action'] == 'open_tab'
+    assert result['params']['route'] == '/scan'
+    assert result['params']['path'] == 'D:\\Downloads'
+
+
+def test_agent_open_tab_without_directory_has_no_focus():
+    result = agent.parse_local('打开扫描分析')
+    assert result['action'] == 'open_tab'
+    assert 'path' not in result['params']
+
+
 def test_agent_can_start_project_radar():
     result = agent.parse_local('扫描项目 D 盘')
     assert result['action'] == 'projects_scan'

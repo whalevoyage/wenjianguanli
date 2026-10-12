@@ -21,6 +21,7 @@ const ORIGIN_LABEL = {
   junk: '垃圾清理',
   projects: '项目雷达',
   home: '首页',
+  agent: 'Agent 助手',
 }
 
 /** 源页面用：跳到某个选项卡，并把当前目录带过去。 */

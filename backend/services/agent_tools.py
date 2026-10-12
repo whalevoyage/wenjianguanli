@@ -90,7 +90,7 @@ WRITE_ACTIONS = {
 
 # 每个动作允许的参数键：模型多吐的字段一律丢弃
 ACTION_PARAMS = {
-    "open_tab": {"route"}, "overview": set(), "jobs_list": set(), "trash_list": set(), "logs_list": set(),
+    "open_tab": {"route", "path"}, "overview": set(), "jobs_list": set(), "trash_list": set(), "logs_list": set(),
     "scan": {"path", "min_size_mb", "extensions"},
     "virtual_preview": {"path", "group_by", "min_size_mb"},
     "projects_scan": {"path", "zombie_days", "max_depth"},

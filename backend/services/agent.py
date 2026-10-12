@@ -1005,10 +1005,16 @@ def parse_local(message: str, context: dict | None = None) -> dict | None:
         "扫描分析": "/scan", "重复文件": "/duplicates", "垃圾文件": "/junk",
         "跨盘迁移": "/migrate", "项目备份": "/backup", "首页": "/",
     }
+    # 这些页接受"带着目录过去"（前端 useHandoffTarget）——只有它们才附带 path，
+    # 其余（任务中心 / 回收站 / 日志 / 空间地图 / 首页）带了也没处用。
+    focus_routes = {"/scan", "/duplicates", "/junk", "/virtual", "/projects", "/migrate", "/search", "/backup"}
     for label, route in tab_routes.items():
         if re.search(rf"(打开|进入|切到|查看){label}", text):
+            params: dict = {"route": route}
+            if paths and route in focus_routes:
+                params["path"] = paths[0]
             return {"action": "open_tab", "label": f"打开{label}", "reason": f"打开{label}",
-                    "params": {"route": route}, "needs_path": False}
+                    "params": params, "needs_path": False}
 
     # ---- 迁移：来源/去向不全就追问；给齐了仍先出只读计划 ----
     if re.search(r"(搬到|挪到|移动到|迁移|移过去|搬走)", text):

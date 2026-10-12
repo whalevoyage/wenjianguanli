@@ -61,6 +61,7 @@ import { useJob } from '../composables/useJob'
 import AgentGlyph from '../components/AgentGlyph.vue'
 import JobProgress from '../components/JobProgress.vue'
 import PlanTree from '../components/PlanTree.vue'
+import NextSteps from '../components/NextSteps.vue'
 import { renderMarkdown } from '../utils/miniMarkdown'
 import { formatShortTime } from '../utils/formatters'
 
@@ -1183,6 +1184,21 @@ function cancelWrite() {
   ElMessage.info('已取消，没有动任何文件')
 }
 
+/** 计划里带的目录（如果有）—— 给"去处理这个目录"的接力出口取路径。 */
+function planFocusPath(plan) {
+  const params = plan?.params || {}
+  const raw = params.path || params.source_dir || (Array.isArray(params.paths) ? params.paths[0] : '')
+  return String(raw || '').trim()
+}
+
+/** Agent 的"结果 → 去处理"出口：与其它页保持同一套。 */
+const agentNextSteps = [
+  { name: 'duplicates', label: '查重' },
+  { name: 'junk', label: '清理' },
+  { name: 'backup', label: '备份' },
+  { name: 'space', label: '空间地图' },
+]
+
 async function executePlan(plan) {
   const params = plan.params || {}
   const base = { excludes: excludes.value }
@@ -1195,7 +1211,9 @@ async function executePlan(plan) {
     logs_list: '/logs',
   }
   if (tabActions[plan.action]) {
-    router.push(tabActions[plan.action])
+    // open_tab 若带了目录，就按「接力」跳过去（目标页会预填好）——"打开扫描分析 D:\X" 落地即就绪
+    const focus = plan.action === 'open_tab' ? String(params.path || '').trim() : ''
+    router.push(focus ? { path: tabActions[plan.action], query: { focus, from: 'agent' } } : tabActions[plan.action])
     return
   }
 
@@ -1851,6 +1869,12 @@ onBeforeUnmount(() => {
                   只读档不可执行写操作
                 </span>
               </div>
+              <NextSteps
+                v-if="planFocusPath(msg.plan)"
+                :path="planFocusPath(msg.plan)"
+                origin="agent"
+                :steps="agentNextSteps"
+              />
             </div>
 
             <div v-if="msg.pending" class="message-phase">
