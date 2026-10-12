@@ -2,6 +2,8 @@
 
 > 本文件只谈 UI 视觉层。功能与架构改造见 [`FEATURE_REVAMP_PLAN.md`](./FEATURE_REVAMP_PLAN.md)。
 > 风格定为「**B 端骨架 + Apple 皮肤**」，2026-10-01 落地。
+>
+> ⚠️ 本文提到的截图均为**本地留档**（`_local_shots/`），**不随仓库分发** —— 只保留文件名以便对照。
 
 ---
 
@@ -1465,7 +1467,7 @@ raw.value = data.logs || []
 | 露底色帧 | 有（screencast 已捕获） | **0** |
 | 首屏渲染行数 | 464 | **50** |
 
-截图 `logs_tab_after_check.png`；修复前的空白帧存为 `docs/images/logs_tab_blank_frame_check.jpg`。
+截图 `logs_tab_after_check.png`；修复前的空白帧存为 `logs_tab_blank_frame_check.jpg`。
 
 ---
 
@@ -1661,7 +1663,7 @@ raw.value = data.logs || []
 下钻: 面包屑 7 → 8 截；上一层回到 7 截；errs: []
 ```
 
-截图 `docs/images/space_viz_v30_light.png` / `docs/images/space_viz_v30_dark.png`。`smoke_test` 73/0，13 个专项测试全绿。
+截图 `space_viz_v30_light.png` / `space_viz_v30_dark.png`。`smoke_test` 73/0，13 个专项测试全绿。
 
 ### 两个真 bug（都是实施中撞出来的）
 
@@ -1713,7 +1715,7 @@ cc-switch.exe                        31.1 MB  10%  条宽 25.8%
 概览条 5 段（含文字 0 字）· 高 30px · 深色轨道 rgba(255,255,255,0.09)
 ```
 
-亮/暗两套截图 `docs/images/space_viz_v31_light.png` / `docs/images/space_viz_v31_dark.png`。
+亮/暗两套截图 `space_viz_v31_light.png` / `space_viz_v31_dark.png`。
 
 ### 刻意没做什么
 
@@ -1773,7 +1775,7 @@ cc-switch.exe                        31.1 MB  10%  条宽 25.8%
 悬停: 阴影 rgba(0,84,168,.18) 0 4px 14px · 底色 rgba(120,120,128,.1) · 位移 translateY(-1px)
 ```
 
-亮/暗截图 `docs/images/space_viz_v32_light.png` / `docs/images/space_viz_v32_dark.png`（另有 `docs/images/space_viz_v32_hover.png`）。
+亮/暗截图 `space_viz_v32_light.png` / `space_viz_v32_dark.png`（另有 `space_viz_v32_hover.png`）。
 
 ### 保留不变的三件事（v30 定的，不许回退）
 
@@ -1816,7 +1818,7 @@ cc-switch.exe                        31.1 MB  10%  条宽 25.8%
 3D 数据城 1275-1443（与卡片网格右缘 1443 对齐，差 0px）
 ```
 
-截图 `docs/images/space_viz_v34_light.png` / `docs/images/space_viz_v34_dark.png`。
+截图 `space_viz_v34_light.png` / `space_viz_v34_dark.png`。
 
 ### 可复用的教训
 
@@ -1859,7 +1861,7 @@ cc-switch.exe                        31.1 MB  10%  条宽 25.8%
 3D 数据城 1275-1443（与卡片网格右缘 1443 对齐，差 0px）
 ```
 
-截图 `docs/images/space_viz_v34_light.png` / `docs/images/space_viz_v34_dark.png`。
+截图 `space_viz_v34_light.png` / `space_viz_v34_dark.png`。
 
 ### 可复用的教训
 
@@ -1906,7 +1908,7 @@ cc-switch.exe                        31.1 MB  10%  条宽 25.8%
 errs: []
 ```
 
-截图 `docs/images/handoff_space_light.png` / `handoff_target_check.png`。
+截图 `handoff_space_light.png` / `handoff_target_check.png`。
 
 ### 新增页面的约定
 

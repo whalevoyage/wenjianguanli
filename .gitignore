@@ -55,6 +55,9 @@ flow_*.png
 /handoff_*.png
 /logs_tab_*.jpg
 
+# 本地留档的截图（UI 评审证据），不随仓库分发
+/_local_shots/
+
 # 临时交接件（用完即弃）
 HANDOFF.md
 
