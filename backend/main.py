@@ -19,7 +19,7 @@ from . import config, diagnostics, fsutil, permissions, scheduler, store
 from .jobs import JOB_TYPES, JobContext, manager
 from .services import (
     agent, agent_task, backup, clean, duplicates, explain, index, junk, migrate, overview, projects,
-    scan, similar, virtual,
+    scan, similar, snapshot, virtual,
 )
 
 app = FastAPI(title="FilePilot Lite API", version="2.0.0")
@@ -44,7 +44,8 @@ WEB_DIR = config.APP_ROOT / "web"
 # ---------------------------------------------------------------------------
 
 class ScanRequest(BaseModel):
-    path: str
+    path: str = ""
+    paths: list[str] | None = None
     excludes: list[str] | None = None
     max_depth: int | None = Field(default=None, ge=0, le=50)
     stale_days: int = Field(default=30, ge=0, le=36500)
@@ -58,10 +59,13 @@ class TreeRequest(BaseModel):
 
 
 class SimilarRequest(BaseModel):
-    path: str
+    path: str = ""
+    paths: list[str] | None = None
     excludes: list[str] | None = None
     threshold: int = Field(default=similar.DEFAULT_THRESHOLD, ge=0, le=32)
     min_size: int = Field(default=similar.DEFAULT_MIN_SIZE, ge=0)
+    # 旋转容忍：同一张图转 90/180/270° 也算相似。默认关（哈希算 4 倍、精度略降）。
+    rotations: bool = False
 
 
 class SearchIndexRequest(BaseModel):
@@ -81,16 +85,30 @@ class ExplainRequest(BaseModel):
 
 
 class DuplicateRequest(BaseModel):
-    path: str
+    path: str = ""
+    paths: list[str] | None = None
     excludes: list[str] | None = None
     min_size: int = Field(default=1, ge=0)
 
 
 class JunkRequest(BaseModel):
-    path: str
+    path: str = ""
+    paths: list[str] | None = None
     excludes: list[str] | None = None
     rules: list[str] | None = None
     include_caution: bool = False
+
+
+class ScanSnapshotRequest(BaseModel):
+    """把一次扫描的结果存成快照（目录级体积聚合，不含逐文件）。"""
+    root: str = ""
+    result: dict = Field(default_factory=dict)
+
+
+class SnapshotCompareRequest(BaseModel):
+    root: str
+    base_id: str
+    target_id: str
 
 
 class VirtualRequest(BaseModel):
@@ -145,6 +163,12 @@ class BackupRequest(BaseModel):
     source_dir: str
     dest_dir: str = ""
     excludes: list[str] | None = None
+
+
+class BackupVerifyRequest(BaseModel):
+    """核对备份能否还原。zip_path 指向已有的备份 ZIP；mode 见 services/backup.py。"""
+    zip_path: str
+    mode: str = "verify"
 
 
 class TrashRequest(BaseModel):
@@ -365,10 +389,12 @@ def rollback_job(job_id: str):
 @app.post("/api/scan")
 def start_scan(request: ScanRequest):
     try:
-        root = fsutil.resolve_dir(request.path)
+        roots, _ = fsutil.resolve_sources(request.model_dump())
     except (OSError, ValueError) as exc:
         raise _friendly(exc)
-    return _launch("scan", f"扫描 {root}", str(root), request.model_dump(), scan.run_scan)
+    root = roots[0]
+    suffix = "" if len(roots) == 1 else f" 等 {len(roots)} 个来源"
+    return _launch("scan", f"扫描 {root}{suffix}", str(root), request.model_dump(), scan.run_scan)
 
 
 @app.post("/api/tree")
@@ -383,19 +409,23 @@ def start_tree(request: TreeRequest):
 @app.post("/api/duplicates/scan")
 def start_duplicate_scan(request: DuplicateRequest):
     try:
-        root = fsutil.resolve_dir(request.path)
+        roots, _ = fsutil.resolve_sources(request.model_dump())
     except (OSError, ValueError) as exc:
         raise _friendly(exc)
-    return _launch("duplicate", f"查找重复文件 {root}", str(root), request.model_dump(), duplicates.run_duplicate_scan)
+    root = roots[0]
+    suffix = "" if len(roots) == 1 else f" 等 {len(roots)} 个来源"
+    return _launch("duplicate", f"查找重复文件 {root}{suffix}", str(root), request.model_dump(), duplicates.run_duplicate_scan)
 
 
 @app.post("/api/junk/scan")
 def start_junk_scan(request: JunkRequest):
     try:
-        root = fsutil.resolve_dir(request.path)
+        roots, _ = fsutil.resolve_sources(request.model_dump())
     except (OSError, ValueError) as exc:
         raise _friendly(exc)
-    return _launch("junk", f"查找垃圾文件 {root}", str(root), request.model_dump(), junk.run_junk_scan)
+    root = roots[0]
+    suffix = "" if len(roots) == 1 else f" 等 {len(roots)} 个来源"
+    return _launch("junk", f"查找垃圾文件 {root}{suffix}", str(root), request.model_dump(), junk.run_junk_scan)
 
 
 @app.post("/api/virtual/organize")
@@ -461,6 +491,15 @@ def start_backup(request: BackupRequest):
     return _launch("backup", f"备份 {source}", str(source), request.model_dump(), backup.run_backup)
 
 
+@app.post("/api/backup/verify")
+def verify_backup(request: BackupVerifyRequest):
+    """核对备份 ZIP 能否真正还原（只读校验，不写用户文件）。"""
+    try:
+        return backup.verify_backup_restore(request.zip_path, request.mode)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+
+
 # ---------------------------------------------------------------------------
 # 回收站
 # ---------------------------------------------------------------------------
@@ -500,10 +539,41 @@ def get_reclaimed_stats():
 def start_similar_scan(request: SimilarRequest):
     """找画面相似的图片（只读，不并进「完全重复」）。"""
     try:
-        root = fsutil.resolve_dir(request.path)
+        roots, _ = fsutil.resolve_sources(request.model_dump())
     except (OSError, ValueError) as exc:
         raise _friendly(exc)
-    return _launch("similar", f"相似图片 {root}", str(root), request.model_dump(), similar.run_similar_scan)
+    root = roots[0]
+    suffix = "" if len(roots) == 1 else f" 等 {len(roots)} 个来源"
+    return _launch("similar", f"相似图片 {root}{suffix}", str(root), request.model_dump(), similar.run_similar_scan)
+
+
+# ---------------------------------------------------------------------------
+# 扫描快照（B-ScanDiff）：保存扫描结果 + 两次对比
+# ---------------------------------------------------------------------------
+
+@app.post("/api/scan/snapshot")
+def save_scan_snapshot(request: ScanSnapshotRequest):
+    """把一次扫描结果存成快照。"""
+    try:
+        meta = snapshot.save_snapshot(request.result)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    return {"snapshot": meta}
+
+
+@app.get("/api/scan/snapshots")
+def list_scan_snapshots(root: str):
+    return {"snapshots": snapshot.list_snapshots(root)}
+
+
+@app.post("/api/scan/compare")
+def compare_scan_snapshots(request: SnapshotCompareRequest):
+    """对比同一 root 下的两张快照，回答"比上次哪里变大了"。"""
+    try:
+        diff = snapshot.compare_snapshots(request.root, request.base_id, request.target_id)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    return diff
 
 
 # ---------------------------------------------------------------------------

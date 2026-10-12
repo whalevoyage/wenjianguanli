@@ -1309,7 +1309,7 @@ def query_local(message: str, context: dict | None = None) -> dict | None:
                                     "message": digest.get("message") or "",
                                     "next_steps": []}}
 
-    if re.search(r"(有什么任务|任务在跑|正在跑|忙不忙|现在在忙|当前任务|在进行什么)", text):
+    if re.search(r"(任务在跑|正在跑|忙不忙|现在在忙|当前任务|在进行什么)", text):
         running = status.get("running") or []
         if not running:
             tail = "现在没有任务在跑"
@@ -1341,7 +1341,7 @@ def query_local(message: str, context: dict | None = None) -> dict | None:
             "message": "已读取本机当前状态。", "data": {**data, "status": status},
         }
 
-    if re.search(r"(任务中心|任务列表|最近任务|有哪些任务)", text):
+    if re.search(r"(任务中心|任务列表|最近任务|有哪些任务|有什么任务)", text):
         from ..jobs import manager
 
         jobs = manager.list(10)

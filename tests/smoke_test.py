@@ -88,6 +88,67 @@ def build_fixture(root: Path) -> None:
     (root / "node_modules" / "dep.js").write_text("dep", encoding="utf-8")
 
 
+def write_png(path: Path, rows: list[bytes]) -> None:
+    """用标准库写一张 8bit RGB PNG（冒烟测试坚持零第三方依赖，所以不引 Pillow）。
+
+    rows：每行是长度 = width*3 的 bytes（RGB 顺序）；每行前加一个 filter 字节 0。
+    """
+    import struct
+    import zlib
+
+    height = len(rows)
+    width = len(rows[0]) // 3 if rows else 0
+    raw = b"".join(b"\x00" + row for row in rows)
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw, 6))
+        + chunk(b"IEND", b"")
+    )
+
+
+def structured_rows(size: int, seed: int) -> list[bytes]:
+    """一张结构化、不对称的 RGB 图（有明暗起伏，dHash 才有信息量；不对称，旋转后指纹会变）。"""
+    import random
+
+    rnd = random.Random(seed)
+    boxes = [
+        (rnd.randrange(size), rnd.randrange(size), rnd.randrange(10, size // 2),
+         rnd.randrange(10, size // 2), (rnd.randrange(256), rnd.randrange(256), rnd.randrange(256)))
+        for _ in range(6)
+    ]
+    rows = []
+    for y in range(size):
+        row = bytearray()
+        for x in range(size):
+            r, g, b = 232, 232, 232
+            for bx, by, bw, bh, col in boxes:
+                if bx <= x < bx + bw and by <= y < by + bh:
+                    r, g, b = col
+            row += bytes((r, g, b))
+        rows.append(bytes(row))
+    return rows
+
+
+def rotate90(rows: list[bytes]) -> list[bytes]:
+    """把 rows 表示的图旋转 90°（方向无所谓：四个朝向里总有一个对得上）。"""
+    height = len(rows)
+    width = len(rows[0]) // 3
+    out = []
+    for x in range(width - 1, -1, -1):
+        row = bytearray()
+        for y in range(height):
+            row += rows[y][x * 3: x * 3 + 3]
+        out.append(bytes(row))
+    return out
+
+
 def main() -> int:
     print(f"FilePilot Lite 冒烟测试 → {BASE}\n")
 
@@ -315,6 +376,65 @@ def main() -> int:
           and call("GET", "/search?q=" + urllib.parse.quote("表型")).get("total") == 0,
           f"removed={removed.get('removed')}")
     shutil.rmtree(sdir, ignore_errors=True)
+
+    # ---- 相似图片（含旋转容忍）----
+    # ★ 单独一个目录：不污染 fixture 的文件数断言
+    print("\n[相似图片]")
+    simdir = fixture.parent / "filepilot_smoke_similar"
+    shutil.rmtree(simdir, ignore_errors=True)
+    simdir.mkdir(parents=True)
+    base_rows = structured_rows(96, 7)
+    write_png(simdir / "orig.png", base_rows)
+    write_png(simdir / "rot90.png", rotate90(base_rows))
+    write_png(simdir / "other.png", structured_rows(96, 99))
+
+    job = wait_job(call("POST", "/similar/scan", {"path": str(simdir), "min_size": 1})["job_id"])
+    check("相似图任务完成", job.get("status") == "done", job.get("error") or "")
+    result = job.get("result") or {}
+    if result.get("available") is False:
+        print(f"  [SKIP] 相似图片 —— {result.get('reason')}")
+    else:
+        check("相似图结果带 rotations 字段（默认 False）", result.get("rotations") is False,
+              str(result.get("rotations")))
+        names_off = {f["name"] for g in result.get("groups", []) for f in g["files"]}
+        check("默认关：旋转副本不被并组", "rot90.png" not in names_off, str(sorted(names_off)))
+
+        job2 = wait_job(call("POST", "/similar/scan",
+                             {"path": str(simdir), "min_size": 1, "rotations": True})["job_id"])
+        check("旋转容忍任务完成", job2.get("status") == "done", job2.get("error") or "")
+        r2 = job2.get("result") or {}
+        check("开启后 rotations=True", r2.get("rotations") is True)
+        groups2 = [{f["name"] for f in g["files"]} for g in r2.get("groups", [])]
+        check("开启后 orig 与 rot90 并组", any({"orig.png", "rot90.png"} <= g for g in groups2), str(groups2))
+    shutil.rmtree(simdir, ignore_errors=True)
+
+    # ---- 项目备份 + 还原核对 ----
+    print("\n[项目备份]")
+    bkdir = fixture.parent / "filepilot_smoke_backup_src"
+    shutil.rmtree(bkdir, ignore_errors=True)
+    (bkdir / "sub").mkdir(parents=True)
+    (bkdir / "hello.txt").write_text("hello backup", encoding="utf-8")
+    (bkdir / "sub" / "data.txt").write_text("data", encoding="utf-8")
+
+    job = wait_job(call("POST", "/backup", {"source_dir": str(bkdir)})["job_id"])
+    check("备份任务完成", job.get("status") == "done", job.get("error") or "")
+    bres = job.get("result") or {}
+    zip_path = bres.get("zip_path") or ""
+    check("产出 ZIP 且文件数正确", bool(zip_path) and bres.get("file_count") == 2,
+          f"{bres.get('file_count')} 个 → {os.path.basename(zip_path)}")
+
+    vfy = call("POST", "/backup/verify", {"zip_path": zip_path, "mode": "verify"})
+    check("备份核对 verify 通过", vfy.get("ok") is True,
+          f"{vfy.get('verified_count')}/{vfy.get('file_count')} 个成员")
+    vfy2 = call("POST", "/backup/verify", {"zip_path": zip_path, "mode": "restore_test"})
+    check("备份核对 restore_test 通过", vfy2.get("ok") is True, f"{vfy2.get('elapsed_seconds')}s")
+
+    try:
+        call("POST", "/backup/verify", {"zip_path": str(bkdir / "nope.zip")})
+        check("缺失备份如实报错", False, "竟然没报错")
+    except RuntimeError as exc:
+        check("缺失备份如实报错（400 而非 500）", "400" in str(exc), str(exc)[:70])
+    shutil.rmtree(bkdir, ignore_errors=True)
 
     # ---- 迁移 ----
     print("\n[跨盘迁移]")

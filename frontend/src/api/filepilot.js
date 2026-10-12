@@ -80,6 +80,9 @@ export function subscribeJob(jobId, onUpdate) {
 
 /* ---------------- 分析 ---------------- */
 export const startScan = payload => unwrap(api.post('/scan', payload))
+export const saveScanSnapshot = payload => unwrap(api.post('/scan/snapshot', payload))
+export const listScanSnapshots = root => unwrap(api.get('/scan/snapshots', { params: { root } }))
+export const compareScanSnapshots = payload => unwrap(api.post('/scan/compare', payload))
 export const startTree = payload => unwrap(api.post('/tree', payload))
 export const startDuplicateScan = payload => unwrap(api.post('/duplicates/scan', payload))
 export const startJunkScan = payload => unwrap(api.post('/junk/scan', payload))

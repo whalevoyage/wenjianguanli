@@ -44,6 +44,7 @@ RECIPES_FILE = STATE_DIR / "recipes.json"
 CONFIG_FILE = STATE_DIR / "config.json"
 SETTINGS_FILE = STATE_DIR / "settings.json"
 TRASH_MANIFEST = STATE_DIR / "trash.json"
+SNAPSHOT_FILE = STATE_DIR / "snapshots.json"
 DATABASE_FILE = STATE_DIR / "filepilot.db"
 
 # 隔离区：所有"删除"默认先落到这里，而不是物理删除。

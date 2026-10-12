@@ -15,18 +15,18 @@ def _fmt_time(ts: float) -> str:
 def run_scan(ctx: JobContext) -> dict:
     """扫描一个目录：数量、体积、类型分布、大文件、长期未动文件。"""
     params = ctx.params
-    root = fsutil.resolve_dir(params.get("path", ""))
+    roots, source_notes = fsutil.resolve_sources(params)
     excludes = params.get("excludes")
     max_depth = params.get("max_depth") or 0
     stale_days = int(params.get("stale_days") or 30)
     stale_min_size = int(params.get("stale_min_size") or 0)
 
     started = time.perf_counter()
-    ctx.phase(0, f"正在扫描 {root}")
+    ctx.phase(0, fsutil.sources_phrase("正在扫描", roots))
 
     total_files = 0
     total_size = 0
-    dirs: set[str] = set()
+    dir_sizes: dict[str, int] = {}
     categories: dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "size": 0})
     large_files: list[dict] = []
     stale_files: list[dict] = []
@@ -34,7 +34,7 @@ def run_scan(ctx: JobContext) -> dict:
     now = time.time()
     stale_cutoff = now - stale_days * 86400
 
-    for entry in fsutil.iter_entries(root, excludes=excludes, max_depth=max_depth,
+    for _root, entry in fsutil.iter_entries_multi(roots, excludes=excludes, max_depth=max_depth,
                                      progress=ctx.tick, cancelled=ctx.cancelled):
         ctx.check_cancel()
         try:
@@ -49,7 +49,8 @@ def run_scan(ctx: JobContext) -> dict:
         name = entry.name
         total_files += 1
         total_size += size
-        dirs.add(os.path.dirname(entry.path))
+        dirname = os.path.dirname(entry.path)
+        dir_sizes[dirname] = dir_sizes.get(dirname, 0) + size
 
         category = config.category_for(name)
         bucket = categories[category]
@@ -66,6 +67,7 @@ def run_scan(ctx: JobContext) -> dict:
         record = {
             "name": name,
             "path": entry.path,
+            "source": str(_root),
             "size": size,
             "size_text": fsutil.format_size(size),
             "category": category,
@@ -99,12 +101,16 @@ def run_scan(ctx: JobContext) -> dict:
     reclaimable = sum(item["size"] for item in stale_files)
 
     return {
-        "root": str(root),
+        "root": str(roots[0]),
+        "sources": [str(item) for item in roots],
+        "source_count": len(roots),
+        "notes": source_notes,
         "scan_time": fsutil.now_iso(),
         "duration_seconds": duration,
         "total_files": total_files,
-        "total_dirs": len(dirs),
+        "total_dirs": len(dir_sizes),
         "total_size": total_size,
+        "dir_sizes": dir_sizes,
         "total_size_text": fsutil.format_size(total_size),
         "category_stats": category_stats,
         "large_files": large_files[:200],

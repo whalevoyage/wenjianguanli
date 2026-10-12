@@ -4,26 +4,54 @@ import { Close, FolderOpened, Plus } from '@element-plus/icons-vue'
 
 const props = defineProps({
   path: { type: String, default: '' },
+  paths: { type: Array, default: () => [] },
   excludes: { type: Array, default: () => [] },
   drives: { type: Array, default: () => [] },
   label: { type: String, default: '目标路径' },
   placeholder: { type: String, default: '例如：D:\\Workspace' },
   showExcludes: { type: Boolean, default: true },
+  multiple: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['update:path', 'update:excludes'])
+const emit = defineEmits(['update:path', 'update:excludes', 'update:paths'])
 
 const expanded = ref(false)
 const draft = ref('')
+const pathDraft = ref('')
 
-const driveOptions = computed(() => (props.drives || []).map(letter => ({
-  letter,
-  root: `${letter}:\\`,
-  active: props.path?.toUpperCase().startsWith(`${letter}:`),
-})))
+const driveOptions = computed(() => (props.drives || []).map(letter => {
+  const root = `${letter}:\\`
+  const active = props.multiple
+    ? (props.paths || []).some(p => String(p || '').toUpperCase().startsWith(`${letter}:`))
+    : String(props.path || '').toUpperCase().startsWith(`${letter}:`)
+  return { letter, root, active }
+}))
 
 function pickDrive(root) {
-  emit('update:path', root)
+  if (props.multiple) togglePath(root)
+  else emit('update:path', root)
+}
+
+function togglePath(root) {
+  const set = new Set(props.paths || [])
+  if (set.has(root)) set.delete(root)
+  else set.add(root)
+  emit('update:paths', [...set])
+}
+
+function removePath(value) {
+  emit('update:paths', (props.paths || []).filter(item => item !== value))
+}
+
+function addPath() {
+  const value = pathDraft.value.trim()
+  if (!value) return
+  if ((props.paths || []).includes(value)) {
+    pathDraft.value = ''
+    return
+  }
+  emit('update:paths', [...(props.paths || []), value])
+  pathDraft.value = ''
 }
 
 function removeExclude(name) {
@@ -60,17 +88,50 @@ function addExclude() {
       </div>
     </div>
 
-    <div class="target-picker__row">
-      <span class="target-picker__label">{{ label }}</span>
-      <el-input
-        :model-value="path"
-        :placeholder="placeholder"
-        clearable
-        @update:model-value="value => emit('update:path', value)"
-      >
-        <template #prefix><el-icon><FolderOpened /></el-icon></template>
-      </el-input>
-    </div>
+    <template v-if="multiple">
+      <div class="target-picker__row">
+        <span class="target-picker__label">{{ label }}</span>
+        <div class="multi-add">
+          <el-input
+            v-model="pathDraft"
+            :placeholder="placeholder"
+            clearable
+            @keyup.enter="addPath"
+          >
+            <template #prefix><el-icon><FolderOpened /></el-icon></template>
+          </el-input>
+          <el-button :icon="Plus" @click="addPath">添加来源</el-button>
+        </div>
+      </div>
+
+      <div v-if="paths.length" class="path-chips">
+        <span
+          v-for="item in paths"
+          :key="item"
+          class="path-chip"
+        >
+          <span class="path-chip__text" :title="item">{{ item }}</span>
+          <button type="button" class="path-chip__close" :title="`移除 ${item}`" @click="removePath(item)">
+            <el-icon><Close /></el-icon>
+          </button>
+        </span>
+      </div>
+      <p v-else class="muted path-hint">还没选来源，点上方盘符或输入路径后「添加来源」</p>
+    </template>
+
+    <template v-else>
+      <div class="target-picker__row">
+        <span class="target-picker__label">{{ label }}</span>
+        <el-input
+          :model-value="path"
+          :placeholder="placeholder"
+          clearable
+          @update:model-value="value => emit('update:path', value)"
+        >
+          <template #prefix><el-icon><FolderOpened /></el-icon></template>
+        </el-input>
+      </div>
+    </template>
 
     <template v-if="showExcludes">
       <div class="target-picker__row target-picker__row--tight">
@@ -171,6 +232,68 @@ function addExclude() {
   border-color: var(--primary);
 }
 
+/* 多源：追加来源的输入行 */
+.multi-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.multi-add .el-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.path-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-left: 88px;
+}
+
+.path-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 320px;
+  padding: 6px 8px 6px 12px;
+  background: var(--inset);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.path-chip__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-chip__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+.path-chip__close:hover {
+  background: var(--hairline);
+  color: var(--ink);
+}
+
+.path-hint {
+  padding-left: 88px;
+}
+
 .exclude-summary {
   display: flex;
   align-items: center;
@@ -214,6 +337,11 @@ function addExclude() {
 @media (max-width: 640px) {
   .target-picker__row {
     grid-template-columns: 1fr;
+  }
+
+  .path-chips,
+  .path-hint {
+    padding-left: 0;
   }
 
   .exclude-add {

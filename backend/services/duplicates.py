@@ -162,12 +162,18 @@ def _full_one(item, prefetched, cancelled):
 
 
 def run_duplicate_scan(ctx: JobContext) -> dict:
+    """找内容完全相同的文件。
+
+    **支持多个来源目录**（B8）：多源不只是"少点几次"—— 只有一次跨多个来源扫描，
+    才能发现"A 目录和 B 目录之间"存在重复，这正是单源扫描永远给不出的信息
+    （见每组结果里的 `cross_source`）。
+    """
     params = ctx.params
-    root = fsutil.resolve_dir(params.get("path", ""))
+    roots, source_notes = fsutil.resolve_sources(params)
     excludes = params.get("excludes")
     min_size = int(params.get("min_size") or 1)
 
-    ctx.phase(0, f"正在列举 {root} 下的文件")
+    ctx.phase(0, fsutil.sources_phrase("正在列举", roots))
     # 存 (Path, mtime_ns)：mtime 从 DirEntry.stat() 免费拿到，一路带到第三层算哈希时
     # 校验缓存是否过期 —— 这样整条链路每个候选文件只 stat 一次
     size_map: dict[int, list[tuple[Path, int]]] = defaultdict(list)
@@ -175,7 +181,7 @@ def run_duplicate_scan(ctx: JobContext) -> dict:
     skipped = 0
     errors: list[str] = []
 
-    for entry in fsutil.iter_entries(root, excludes=excludes, progress=ctx.tick, cancelled=ctx.cancelled):
+    for root, entry in fsutil.iter_entries_multi(roots, excludes=excludes, progress=ctx.tick, cancelled=ctx.cancelled):
         ctx.check_cancel()
         try:
             stat = entry.stat()          # Windows 上目录列表已带回属性，零系统调用
@@ -257,7 +263,9 @@ def run_duplicate_scan(ctx: JobContext) -> dict:
             "size": size,
             "size_text": fsutil.format_size(size),
             "modified_time": _fmt_mtime(mtime_ns),
+            "source": fsutil.source_of(path, roots),
         } for path, mtime_ns in items]
+        group_sources = sorted({record["source"] for record in records})
         groups.append({
             "sha256": checksum,
             "sha256_short": checksum[:12],
@@ -268,9 +276,14 @@ def run_duplicate_scan(ctx: JobContext) -> dict:
             "original": records[0],
             "redundant_files": records[1:],
             "files": records,
+            "sources": group_sources,
+            # ★ 跨目录重复：成员来自不同的来源目录。单源扫描永远给不出这个信息。
+            "cross_source": len(group_sources) > 1,
         })
 
     groups.sort(key=lambda item: item["size"] * (item["count"] - 1), reverse=True)
+    # 跨目录的重复排到前面 —— 那才是多源带来的新信息，也是真该先处理的那些
+    groups.sort(key=lambda item: not item["cross_source"])
     redundant = sum(len(item["redundant_files"]) for item in groups)
     reclaimable = sum(item["size"] * len(item["redundant_files"]) for item in groups)
 
@@ -278,7 +291,11 @@ def run_duplicate_scan(ctx: JobContext) -> dict:
     _flush_hash_cache()
 
     return {
-        "root": str(root),
+        "root": str(roots[0]),
+        "sources": [str(item) for item in roots],
+        "source_count": len(roots),
+        # 嵌套/重复来源被自动跳过的说明 —— 是提示不是错误，所以单列一个字段
+        "notes": source_notes,
         "scanned_files": scanned,
         "skipped_files": skipped,
         "candidate_files": candidate_files,

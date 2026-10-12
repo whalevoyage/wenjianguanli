@@ -42,7 +42,8 @@ export function useHandoff() {
  * 返回 `handed`（带过来的目录，空串表示这次不是被带过来的）与 `from`（来源页面的中文名），
  * 页面拿它们出一条提示，让用户知道"这个框为什么已经填好了"。
  */
-export function useHandoffTarget(targetRef) {
+export function useHandoffTarget(targetRef, options = {}) {
+  const multiple = !!options.multiple
   const route = useRoute()
   const handed = ref('')
   const from = ref('')
@@ -50,7 +51,12 @@ export function useHandoffTarget(targetRef) {
   onMounted(() => {
     const focus = typeof route.query.focus === 'string' ? route.query.focus : ''
     if (!focus) return
-    targetRef.value = focus
+    // 多源模式：把带过来的目录**追加**进列表，而不是覆盖已有的选择
+    if (multiple && Array.isArray(targetRef.value)) {
+      targetRef.value = Array.from(new Set([...targetRef.value, focus]))
+    } else {
+      targetRef.value = focus
+    }
     handed.value = focus
     const origin = typeof route.query.from === 'string' ? route.query.from : ''
     from.value = ORIGIN_LABEL[origin] || ''

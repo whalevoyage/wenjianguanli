@@ -369,6 +369,146 @@ def iter_entries(
             yield entry
 
 
+def resolve_sources(params: dict) -> tuple[list[Path], list[str]]:
+    """从任务参数里取出**多个来源目录**。返回 `(roots, notes)`。
+
+    优先 `paths`（列表），回退到 `path` / `source_dir`（单个）—— 保留单参数形式是为了
+    **不打破既有调用方**：Agent 意图解析 / CLI / MCP 三处现在都只发单个 `path`。
+
+    两处刻意的严格/宽松：
+
+    - **任何一个来源不存在就整体失败**（抛异常，不跑一半）。
+      半份结果比报错更危险 —— 用户会以为另外那几个目录也"没东西"。
+    - **嵌套的根自动跳过**（写进 notes，不报错）。同时给了 `D:\\A` 与 `D:\\A\\sub` 时，
+      sub 下的文件会被遍历**两次**：在查重里表现为"每个文件都是自己的重复"，凭空造出一批假重复。
+      这只是用户多选了一下，不该因此跑不起来。
+    """
+    raw = [str(item).strip() for item in (params.get("paths") or []) if str(item).strip()]
+    if not raw:
+        single = str(params.get("path") or params.get("source_dir") or "").strip()
+        raw = [single] if single else []
+    if not raw:
+        raise ValueError("没有指定任何来源目录")
+
+    candidates = [(value, normalize(value)) for value in raw]
+    # 短的排前面：父目录先被留下，子目录才能被判成"已被包含"
+    candidates.sort(key=lambda item: len(str(item[1])))
+
+    kept: list[Path] = []
+    notes: list[str] = []
+    for _value, path in candidates:
+        if not path.exists():
+            raise FileNotFoundError(f"路径不存在：{path}")
+        if not path.is_dir():
+            raise NotADirectoryError(f"不是文件夹：{path}")
+        parent = next((item for item in kept if _path_contains(item, path)), None)
+        if parent is not None:
+            if _path_contains(parent, path) and str(parent).rstrip("\\/").lower() == str(path).rstrip("\\/").lower():
+                notes.append(f"{path} 重复选择了，已自动合并")
+            else:
+                notes.append(f"{path} 已包含在 {parent} 内，已自动跳过")
+            continue
+        kept.append(path)
+    return kept, notes
+
+
+def sources_phrase(prefix: str, roots: list[Path]) -> str:
+    """任务阶段名：「正在列举 D:\\x」/「正在列举 3 个来源（D:\\x 等）」"""
+    if len(roots) <= 1:
+        return f"{prefix} {roots[0]}" if roots else prefix
+    return f"{prefix} {len(roots)} 个来源（{roots[0]} 等）"
+
+
+def source_of(path: Path | str, roots: list[Path]) -> str:
+    """这条结果来自哪个来源目录。
+
+    用前缀匹配而不是在遍历时另存一份映射：多源时每个文件都记一份来源会白白多占一份内存
+    （几十万文件时是几十 MB），而结果条目通常只有几百条，按前缀回查几乎不要钱。
+    """
+    text = str(path)
+    for root in roots:
+        head = str(root).rstrip("\\/")
+        if text == head or text.startswith(head + "\\") or text.startswith(head + "/"):
+            return str(root)
+    return str(roots[0]) if roots else ""
+
+
+def _path_contains(parent: Path, child: Path) -> bool:
+    """parent 是不是 child 本身或它的祖先（按路径字符串比，不碰磁盘）。"""
+    head = str(parent).rstrip("\\/").lower()
+    tail = str(child).rstrip("\\/").lower()
+    return tail == head or tail.startswith(head + "\\") or tail.startswith(head + "/")
+
+
+def iter_entries_multi(
+    roots: list[Path],
+    *,
+    excludes: Iterable[str] | None = None,
+    max_depth: int | None = None,
+    progress: ProgressFn | None = None,
+    cancelled: CancelFn | None = None,
+    **kwargs,
+) -> Iterator[tuple[Path, os.DirEntry]]:
+    """按顺序遍历多个根目录，产出 `(root, entry)`。
+
+    与"外面自己 for 一遍 iter_entries"的区别只有两点，但**两点都是必须的**：
+
+    1. **进度全局单调** —— 先数完所有根，再用 offset 把各根的进度接起来。
+       逐个调的话，每换一个根百分比就归零重来，界面看起来像来回跳。
+    2. **条目预算全局共享** —— `SCAN_ENTRY_LIMIT` 在 `iter_entries` 里是**每个根**一份，
+       多源会变成 N× 预算。这里自己按总量卡一道。
+    """
+    roots = [Path(root) for root in roots]
+    if not roots:
+        return
+
+    if len(roots) == 1:
+        for entry in iter_entries(roots[0], excludes=excludes, max_depth=max_depth,
+                                  progress=progress, cancelled=cancelled, **kwargs):
+            yield roots[0], entry
+        return
+
+    totals: list[int] = []
+    for index, root in enumerate(roots):
+        if cancelled and cancelled():
+            return
+        if progress:
+            def _counting(_message: str, done: int, _total: int | None, where: str,
+                          _index: int = index, _n: int = len(roots)) -> None:
+                progress(f"正在统计条目数（第 {_index + 1}/{_n} 个来源）—— 已数 {done:,} 项",
+                         done, None, where)
+        else:
+            _counting = None
+        totals.append(count_entries(
+            root, excludes=excludes, max_depth=max_depth, cancelled=cancelled, progress=_counting,
+        ) or 0)
+
+    grand = sum(totals) or None
+    budget = config.SCAN_ENTRY_LIMIT
+    scanned = 0
+    for index, (root, total) in enumerate(zip(roots, totals)):
+        offset = scanned
+
+        def _relay(message: str, current: int, _total: int | None, where: str,
+                   _index: int = index, _n: int = len(roots), _offset: int = offset) -> None:
+            progress(f"{message}（第 {_index + 1}/{_n} 个来源）", _offset + current, grand, where)
+
+        for entry in iter_entries(
+            root, excludes=excludes, max_depth=max_depth,
+            # total 传进来是为了**阻止它自己再数一遍**（它见 progress 且 total=None 会先预统计）
+            total=total, progress=_relay if progress else None, cancelled=cancelled, **kwargs,
+        ):
+            yield root, entry
+            scanned += 1
+            if scanned >= budget:
+                return
+        # 这个根实际产出的条目数可能与预统计不同（期间文件有增减）—— 用预估值推进 offset 即可，
+        # 进度条不必逐字节精确，但不能倒退。
+        scanned = offset + total
+        if scanned < 0:
+            scanned = offset
+
+
 def iter_files(root: Path, **kwargs) -> Iterator[Path]:
     """遍历文件，产出 `Path`（既有契约，5 个服务在用）。
 

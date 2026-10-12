@@ -31,5 +31,9 @@ def test_assert_no_symlink_rejects_symlink(tmp_path):
         link.symlink_to(target)
     except OSError:
         pytest.skip("symlink creation unavailable")
+    # 某些沙箱/无特权环境下 symlink_to 不报错却静默不创建（is_symlink 为假），
+    # 此时没有可测对象，跳过而非误判为"漏检"。
+    if not link.is_symlink():
+        pytest.skip("symlink creation no-op (sandbox/permission)")
     with pytest.raises(fsutil.BlockedPathError):
         fsutil.assert_no_symlink(link)

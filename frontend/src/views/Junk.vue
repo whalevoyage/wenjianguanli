@@ -18,12 +18,13 @@ const { config, excludes, load: loadConfig } = useConfig()
 const scan = useJob('junk.scan')
 const clean = useJob('junk.clean')
 
-const path = ref('')
-/* 跨页接力：从别的页面带着目录过来时，直接填好这个框（不自动开跑） */
-const { handed, from } = useHandoffTarget(path)
+const paths = ref([])
+/* 跨页接力：从别的页面带着目录过来时，直接追加进这个列表（不自动开跑） */
+const { handed, from } = useHandoffTarget(paths, { multiple: true })
 
 /** 反向接力：用同一个目录去别的能力，不用再选一次 */
 const nextSteps = [{ name: 'space', label: '空间地图' }, { name: 'migrate', label: '迁移到别处' }]
+const primaryPath = computed(() => paths.value[0] || '')
 const includeCaution = ref(false)
 const cleanMode = ref('isolate')
 const selected = ref(new Set())
@@ -144,11 +145,12 @@ function toggleLevel(level) {
 }
 
 async function start() {
-  if (!path.value.trim()) return
+  const targets = paths.value.map(p => p.trim()).filter(Boolean)
+  if (!targets.length) return
   result.value = null
   selected.value = new Set()
   await scan.run(() => startJunkScan({
-    path: path.value.trim(),
+    paths: targets,
     excludes: excludes.value,
     include_caution: includeCaution.value,
   }))
@@ -226,11 +228,12 @@ onMounted(async () => {
       </el-alert>
 
       <TargetPicker
-        v-model:path="path"
+        :multiple="true"
+        v-model:paths="paths"
         v-model:excludes="excludes"
         :drives="config?.drives || []"
         label="扫描路径"
-        placeholder="例如：C:\\ 或 D:\\Downloads"
+        placeholder="可多选：分别添加多个目录一起检查"
       />
 
       <div class="row-actions">
@@ -255,7 +258,15 @@ onMounted(async () => {
         <StatCard v-for="item in cards" :key="item.title" v-bind="item" />
       </section>
 
-      <NextSteps :path="path" origin="junk" :steps="nextSteps" />
+      <NextSteps :path="primaryPath" origin="junk" :steps="nextSteps" />
+
+      <el-alert
+        v-if="result.notes?.length"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="`已自动处理来源：${result.notes.join('；')}`"
+      />
 
       <section
         v-for="level in levels"
@@ -279,6 +290,7 @@ onMounted(async () => {
             <div class="junk-row__copy">
               <strong>{{ item.name }}</strong>
               <small class="path-text" :title="item.path">{{ item.path }}</small>
+              <small class="muted">{{ item.source }}</small>
               <!-- 解释就地显示：有内容才占位，没问过就什么都不显示 -->
               <small v-if="explanations[item.path]?.text" class="junk-row__explain">
                 {{ explanations[item.path].text }}

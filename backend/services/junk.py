@@ -48,19 +48,21 @@ def _is_cache(path: Path) -> bool:
 
 def run_junk_scan(ctx: JobContext) -> dict:
     params = ctx.params
-    root = fsutil.resolve_dir(params.get("path", ""))
+    roots, source_notes = fsutil.resolve_sources(params)
+    # 多个来源自身不算"空目录"，遍历时要逐个跳过
+    root_texts = {str(item).rstrip("\\/").lower() for item in roots}
     excludes = params.get("excludes")
     enabled_rules = set(params.get("rules") or [rule["id"] for rule in config.JUNK_RULES])
     include_caution = bool(params.get("include_caution", False))
     # 档位在这里取一次：full 档把软保护目录（桌面）也纳入扫描
     permission = permissions.current()
 
-    ctx.phase(0, f"正在检查 {root}")
+    ctx.phase(0, fsutil.sources_phrase("正在检查", roots))
     buckets: dict[str, list[dict]] = {rule["id"]: [] for rule in config.JUNK_RULES}
     errors: list[str] = []
     scanned = 0
 
-    for entry in fsutil.iter_entries(root, excludes=excludes, progress=ctx.tick, cancelled=ctx.cancelled):
+    for root, entry in fsutil.iter_entries_multi(roots, excludes=excludes, progress=ctx.tick, cancelled=ctx.cancelled):
         ctx.check_cancel()
         scanned += 1
         try:
@@ -97,6 +99,7 @@ def run_junk_scan(ctx: JobContext) -> dict:
             "rule": rule_id,
             "is_dir": False,
             "protected": False,
+            "source": fsutil.source_of(path, roots),
         })
 
     # 空文件夹：单独一趟「只数名字、不 stat」的遍历。
@@ -182,7 +185,10 @@ def run_junk_scan(ctx: JobContext) -> dict:
 
     safe_level = levels[0]
     return {
-        "root": str(root),
+        "root": str(roots[0]),
+        "sources": [str(item) for item in roots],
+        "source_count": len(roots),
+        "notes": source_notes,
         "scanned_files": scanned,
         "total_count": total_count,
         "total_size": total_size,

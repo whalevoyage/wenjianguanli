@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Clock, Files, FolderOpened, PieChart, Search } from '@element-plus/icons-vue'
 import EmptyState from '../components/EmptyState.vue'
-import { startScan } from '../api/filepilot'
+import { startScan, saveScanSnapshot, listScanSnapshots, compareScanSnapshots } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
 import DataTable from '../components/DataTable.vue'
@@ -17,9 +17,9 @@ import { formatBytes, formatCount, formatDuration } from '../utils/formatters'
 const { config, excludes, load: loadConfig } = useConfig()
 const { job, running, run, cancel, rollback } = useJob('scan')
 
-const path = ref('')
-/* 跨页接力：从别的页面带着目录过来时直接填好；也能从这里把目录带给别的页面 */
-const { handed, from } = useHandoffTarget(path)
+const paths = ref([])
+/* 跨页接力：从别的页面带着目录过来时直接追加；也能从这里把目录带给别的页面 */
+const { handed, from } = useHandoffTarget(paths, { multiple: true })
 
 /** 反向接力：用同一个目录去别的能力，不用再选一次 */
 const nextSteps = [
@@ -27,6 +27,7 @@ const nextSteps = [
   { name: 'junk', label: '清理' },
   { name: 'space', label: '空间地图' },
 ]
+const primaryPath = computed(() => paths.value[0] || '')
 
 const staleDays = ref(30)
 const result = ref(null)
@@ -117,17 +118,76 @@ const categoryColumns = [
 ]
 
 async function start() {
-  if (!path.value.trim()) return
+  const targets = paths.value.map(p => p.trim()).filter(Boolean)
+  if (!targets.length) return
   result.value = null
   await run(() => startScan({
-    path: path.value.trim(),
+    paths: targets,
     excludes: excludes.value,
     stale_days: staleDays.value,
   }))
 }
 
 async function refreshResult() {
-  if (job.value?.status === 'done') result.value = job.value.result
+  if (job.value?.status === 'done') {
+    result.value = job.value.result
+    diff.value = null
+    await loadSnapshots()
+  }
+}
+
+/* ---- 扫描快照（B-ScanDiff）：保存 / 列出 / 对比 ---- */
+const snapshots = ref([])
+const baseId = ref('')
+const targetId = ref('')
+const diff = ref(null)
+
+async function loadSnapshots() {
+  if (!result.value) return
+  try {
+    const data = await listScanSnapshots(result.value.root)
+    snapshots.value = data.snapshots || []
+    const ids = snapshots.value.map(s => s.id)
+    if (ids.length >= 2) {
+      targetId.value = ids[ids.length - 1]
+      baseId.value = ids[ids.length - 2]
+    } else if (ids.length === 1) {
+      targetId.value = ids[ids.length - 1]
+      baseId.value = ''
+    } else {
+      baseId.value = ''
+      targetId.value = ''
+    }
+  } catch {
+    snapshots.value = []
+  }
+}
+
+async function saveCurrentSnapshot() {
+  if (!result.value) return
+  await saveScanSnapshot({ root: result.value.root, result: result.value })
+  diff.value = null
+  await loadSnapshots()
+}
+
+const canCompare = computed(
+  () => baseId.value && targetId.value && baseId.value !== targetId.value,
+)
+
+async function runCompare() {
+  if (!canCompare.value || !result.value) return
+  const data = await compareScanSnapshots({
+    root: result.value.root,
+    base_id: baseId.value,
+    target_id: targetId.value,
+  })
+  diff.value = data
+}
+
+function fmtDelta(n) {
+  if (n > 0) return `+${n}`
+  if (n < 0) return `${n}`
+  return '0'
 }
 
 onMounted(async () => {
@@ -143,11 +203,12 @@ onMounted(async () => {
 
 
       <TargetPicker
-        v-model:path="path"
+        :multiple="true"
+        v-model:paths="paths"
         v-model:excludes="excludes"
         :drives="config?.drives || []"
         label="扫描路径"
-        placeholder="例如：D:\\ 或 D:\\Workspace"
+        placeholder="可多选：分别添加多个目录一起扫描"
       />
 
       <div class="row-actions">
@@ -186,7 +247,7 @@ onMounted(async () => {
         <StatCard v-for="item in metrics" :key="item.title" v-bind="item" />
       </section>
 
-      <NextSteps :path="path" origin="scan" :steps="nextSteps" />
+      <NextSteps :path="primaryPath" origin="scan" :steps="nextSteps" />
 
       <el-alert
         v-if="result.warnings?.length"
@@ -194,6 +255,14 @@ onMounted(async () => {
         :closable="false"
         show-icon
         :title="`有 ${result.warnings.length} 个项目无法读取（权限不足、文件被占用或路径异常）`"
+      />
+
+      <el-alert
+        v-if="result.notes?.length"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="`已自动处理来源：${result.notes.join('；')}`"
       />
 
       <section class="section-grid">
@@ -235,6 +304,7 @@ onMounted(async () => {
               <strong>{{ file.name }}</strong>
               <span>{{ file.size_text }} · {{ file.modified_time }}</span>
               <small class="path-text" :title="file.path">{{ file.path }}</small>
+              <small class="muted">{{ file.source }}</small>
             </div>
           </div>
 
@@ -255,6 +325,92 @@ onMounted(async () => {
         </div>
 
         <DataTable :columns="largeColumns" :data="largeRows.slice(0, 10)" empty-text="没有符合条件的大文件" />
+      </section>
+
+      <section class="app-card panel-card">
+        <div class="panel-title-row">
+          <div>
+            <h3 class="panel-title">历史快照</h3>
+            <p class="panel-subtitle">保存扫描结果，对比两次看看哪里变大了</p>
+          </div>
+          <el-button size="small" :disabled="!result" @click="saveCurrentSnapshot">保存当前为快照</el-button>
+        </div>
+
+        <div v-if="snapshots.length" class="snapshot-controls">
+          <el-select v-model="baseId" placeholder="基准" size="small" class="snap-select">
+            <el-option v-for="s in snapshots" :key="s.id" :label="s.time" :value="s.id" />
+          </el-select>
+          <span class="muted">→</span>
+          <el-select v-model="targetId" placeholder="目标" size="small" class="snap-select">
+            <el-option v-for="s in snapshots" :key="s.id" :label="s.time" :value="s.id" />
+          </el-select>
+          <el-button size="small" type="primary" :disabled="!canCompare" @click="runCompare">对比</el-button>
+        </div>
+        <p v-else class="muted small">还没有快照。先点「保存当前为快照」存一份，下次扫描后再存一份就能对比。</p>
+
+        <template v-if="diff">
+          <el-alert
+            v-if="diff.scope_mismatch"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="两次扫描的范围不一致（排除规则或深度不同），下面的增减仅供参考"
+          />
+
+          <div class="stats-grid diff-summary">
+            <StatCard
+              title="总量变化"
+              :value="diff.total_size_delta_text"
+              :note="`文件 ${fmtDelta(diff.total_files_delta)} · 目录 ${fmtDelta(diff.total_dirs_delta)}`"
+              :icon="PieChart"
+              tone="blue"
+            />
+            <StatCard title="基准" :value="diff.base.total_size_text" :note="diff.base.time" :icon="Clock" tone="blue" />
+            <StatCard title="目标" :value="diff.target.total_size_text" :note="diff.target.time" :icon="Clock" tone="blue" />
+          </div>
+
+          <div class="section-grid">
+            <article v-if="diff.added.length" class="app-card panel-card">
+              <h4 class="diff-title">新增目录</h4>
+              <div class="diff-list">
+                <div v-for="item in diff.added" :key="item.path" class="diff-item">
+                  <span class="diff-path" :title="item.path">{{ item.path }}</span>
+                  <strong class="diff-size up">+{{ item.size_text }}</strong>
+                </div>
+              </div>
+            </article>
+
+            <article v-if="diff.removed.length" class="app-card panel-card">
+              <h4 class="diff-title">消失目录</h4>
+              <div class="diff-list">
+                <div v-for="item in diff.removed" :key="item.path" class="diff-item">
+                  <span class="diff-path" :title="item.path">{{ item.path }}</span>
+                  <strong class="diff-size down">-{{ item.size_text }}</strong>
+                </div>
+              </div>
+            </article>
+
+            <article v-if="diff.grown.length" class="app-card panel-card">
+              <h4 class="diff-title">变大目录</h4>
+              <div class="diff-list">
+                <div v-for="item in diff.grown" :key="item.path" class="diff-item">
+                  <span class="diff-path" :title="item.path">{{ item.path }}</span>
+                  <strong class="diff-size up">{{ item.delta_text }}</strong>
+                </div>
+              </div>
+            </article>
+
+            <article v-if="diff.shrunk.length" class="app-card panel-card">
+              <h4 class="diff-title">变小目录</h4>
+              <div class="diff-list">
+                <div v-for="item in diff.shrunk" :key="item.path" class="diff-item">
+                  <span class="diff-path" :title="item.path">{{ item.path }}</span>
+                  <strong class="diff-size down">{{ item.delta_text }}</strong>
+                </div>
+              </div>
+            </article>
+          </div>
+        </template>
       </section>
     </template>
   </div>
@@ -308,5 +464,77 @@ onMounted(async () => {
 
 .stale-item small {
   margin-top: 5px;
+}
+
+.snapshot-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 14px;
+}
+
+.snap-select {
+  width: 200px;
+}
+
+.muted {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.small {
+  font-size: 12px;
+}
+
+.diff-summary {
+  margin: 14px 0;
+}
+
+.diff-title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.diff-list {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.diff-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.diff-path {
+  font-size: 12px;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-size {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.diff-size.up {
+  color: var(--danger, #e5484d);
+}
+
+.diff-size.down {
+  color: var(--success, #30a46c);
 }
 </style>

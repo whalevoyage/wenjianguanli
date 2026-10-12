@@ -19,12 +19,13 @@ const scan = useJob('duplicates.scan')
 const clean = useJob('duplicates.clean')
 const simRun = useJob('duplicates.similar')
 
-const path = ref('')
-/* 跨页接力：从别的页面带着目录过来时，直接填好这个框（不自动开跑） */
-const { handed, from } = useHandoffTarget(path)
+const paths = ref([])
+/* 跨页接力：从别的页面带着目录过来时，直接追加进这个列表（不自动开跑） */
+const { handed, from } = useHandoffTarget(paths, { multiple: true })
 
 /** 反向接力：用同一个目录去别的能力，不用再选一次 */
 const nextSteps = [{ name: 'space', label: '空间地图' }, { name: 'migrate', label: '迁移到别处' }]
+const primaryPath = computed(() => paths.value[0] || '')
 const result = ref(null)
 /* 相似图片的结果单独放 —— 相似 ≠ 相同，界面上必须分开呈现，绝不混进「完全重复」 */
 const similar = ref(null)
@@ -32,6 +33,8 @@ const activeGroups = ref([])
 const selected = ref(new Set())
 /* 相似阈值：越小越严格。6 是默认，调到 10 会宽松很多（误报也变多） */
 const similarThreshold = ref(6)
+/* 旋转容忍：同一张图转 90/180/270° 也算相似。默认关（哈希算约 3 倍） */
+const similarRotations = ref(false)
 
 const metrics = computed(() => {
   if (!result.value) return []
@@ -113,10 +116,11 @@ function selectGroup(group) {
 }
 
 async function start() {
-  if (!path.value.trim()) return
+  const targets = paths.value.map(p => p.trim()).filter(Boolean)
+  if (!targets.length) return
   result.value = null
   selected.value = new Set()
-  await scan.run(() => startDuplicateScan({ path: path.value.trim(), excludes: excludes.value }))
+  await scan.run(() => startDuplicateScan({ paths: targets, excludes: excludes.value }))
 }
 
 /**
@@ -126,12 +130,14 @@ async function start() {
  * 结果**分开放**，因为相似不等于相同 —— 删哪张得自己看图。
  */
 async function startSimilar() {
-  if (!path.value.trim()) return
+  const targets = paths.value.map(p => p.trim()).filter(Boolean)
+  if (!targets.length) return
   similar.value = null
   await simRun.run(() => startSimilarScan({
-    path: path.value.trim(),
+    paths: targets,
     excludes: excludes.value,
     threshold: similarThreshold.value,
+    rotations: similarRotations.value,
   }))
 }
 
@@ -179,11 +185,12 @@ onMounted(async () => {
       <HandoffNote v-if="handed" :path="handed" :from="from" @dismiss="handed = ''" />
 
       <TargetPicker
-        v-model:path="path"
+        :multiple="true"
+        v-model:paths="paths"
         v-model:excludes="excludes"
         :drives="config?.drives || []"
         label="查找路径"
-        placeholder="例如：D:\\ 或 D:\\Downloads"
+        placeholder="可多选：分别添加多个目录一起查重"
       />
 
       <div class="row-actions">
@@ -197,6 +204,14 @@ onMounted(async () => {
         <el-select v-model="similarThreshold" size="large" class="similar-threshold" title="相似阈值：越小越严格，默认 6">
           <el-option v-for="n in [4, 6, 8, 10, 12]" :key="n" :label="`相似阈值 ${n}`" :value="n" />
         </el-select>
+        <el-checkbox
+          v-model="similarRotations"
+          size="large"
+          class="similar-rotations"
+          title="开启后：同一张图旋转 90°/180°/270° 也能匹配（哈希计算约 3 倍）"
+        >
+          旋转容忍
+        </el-checkbox>
       </div>
 
       <JobProgress v-if="scan.job.value" :job="scan.job.value" empty-title="先跑一次查重" @cancel="scan.cancel" />
@@ -214,13 +229,21 @@ onMounted(async () => {
         <StatCard v-for="item in metrics" :key="item.title" v-bind="item" />
       </section>
 
-      <NextSteps :path="path" origin="duplicates" :steps="nextSteps" />
+      <NextSteps :path="primaryPath" origin="duplicates" :steps="nextSteps" />
 
       <el-alert
         type="success"
         :closable="false"
         show-icon
         :title="`按大小直接淘汰了 ${formatCount(result.eliminated_by_size)} 个文件，只对 ${formatCount(result.candidate_files)} 个候选算了哈希`"
+      />
+
+      <el-alert
+        v-if="result.notes?.length"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="`已自动处理来源：${result.notes.join('；')}`"
       />
 
       <section v-if="result.groups?.length" class="app-card panel-card">
@@ -249,6 +272,7 @@ onMounted(async () => {
                 <strong>{{ group.count }} 个相同文件</strong>
                 <span>{{ group.size_text }} / 个 · 可省 {{ formatBytes(group.size * (group.count - 1)) }}</span>
                 <code>{{ group.sha256_short }}</code>
+                <el-tag v-if="group.cross_source" size="small" type="warning" effect="plain">跨目录重复</el-tag>
               </div>
             </template>
 
@@ -268,6 +292,7 @@ onMounted(async () => {
                 <div class="file-row__copy">
                   <strong>{{ file.name }}</strong>
                   <small class="path-text" :title="file.path">{{ file.path }}</small>
+                  <small class="muted">{{ file.source }}</small>
                 </div>
 
                 <span class="status-dot" :class="fileIndex === 0 ? 'status-dot--success' : 'status-dot--warning'">{{ fileIndex === 0 ? '保留' : '副本' }}</span>
@@ -589,5 +614,9 @@ onMounted(async () => {
   display: block;
   margin-top: 4px;
   font-size: 12px;
+}
+
+.similar-rotations {
+  margin-left: 2px;
 }
 </style>

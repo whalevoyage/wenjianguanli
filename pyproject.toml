@@ -3,6 +3,8 @@ name = "atlas-filepilot"
 version = "2.0.0"
 description = "本地文件管理台：扫描 / 查重 / 清理 / 跨盘迁移 / 空间地图 + Agent 助手（除助手页外零 token、纯本地）"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "王鑫焱 (wangxinyan)" }]
 
 # 运行必需：只有这两个。
 # 其余全部可选 —— 不装也能跑，只是对应功能不可用（会在界面上如实说明缺什么）。
@@ -18,8 +20,9 @@ desktop = ["pywebview"]
 images = ["pillow"]
 # 打包发行版
 packaging = ["pyinstaller"]
-# 测试只用标准库（unittest），所以这里是空的 —— 不需要 pytest
-test = []
+# 部分测试用 pytest（pytest.raises / tmp_path 等），所以这里声明 pytest；
+# 想跑测试：`pip install -e .[test]` 后 `python -m pytest tests/ -q`（仅收 test_*.py）。
+test = ["pytest"]
 
 [project.scripts]
 atlas = "packaging.launcher:main"
@@ -29,3 +32,11 @@ atlas-cli = "backend.cli:main"
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+
+[tool.pytest.ini_options]
+# 只把 `test_*.py` 当单元测试收集；`*_test.py`（smoke_test / messagebox_style_test / …）
+# 是必须起服务器或浏览器的手动脚本，不要让 pytest 在收集阶段就崩。
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+addopts = "-q"

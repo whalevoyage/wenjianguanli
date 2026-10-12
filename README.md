@@ -315,3 +315,10 @@ powershell -ExecutionPolicy Bypass -File .\packaging\build_release.ps1
 ## 数据与隐私
 
 Atlas 以本地运行为主。除用户主动启用 DeepSeek 请求外，文件内容、扫描结果和任务状态不会主动上传到远程服务。使用云端模型时，用户输入会发送给所配置的服务商；文件操作仍由本机执行。请勿在对话中输入密码、密钥或其他敏感信息。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE) 开源。你可以自由使用、修改和分发，只需保留版权与许可声明。
+
+> MCP server 的安全边界（白名单、只读工具、两处不受白名单约束的出口）见 [`docs/MCP_SECURITY.md`](docs/MCP_SECURITY.md)。
+> 当前已知限制见 [`docs/LIMITS.md`](docs/LIMITS.md)。
