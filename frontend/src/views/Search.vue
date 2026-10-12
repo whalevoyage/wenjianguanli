@@ -65,6 +65,15 @@ const status = ref({ enabled: true, roots: [], total_files: 0 })
 const result = ref(null)
 const lastIndexed = ref(null)
 const searching = ref(false)
+/* 进页面时自动更新过期索引（走的是增量：只重读变化的文件，没变的一律跳过）。
+   默认关 —— 原设计是「只提示、不自动跑」，这个开关把选择权交给用户。 */
+const AUTO_REFRESH_KEY = 'atlas.search.autoRefresh'
+const autoRefresh = ref(false)
+try {
+  autoRefresh.value = localStorage.getItem(AUTO_REFRESH_KEY) === '1'
+} catch {
+  autoRefresh.value = false   /* 隐私模式等拿不到 localStorage，当作关闭 */
+}
 
 /** 结果之后能干什么 —— 这一页也要遵守「看 → 挑 → 执行」契约，不能是路的尽头 */
 const nextSteps = [
@@ -124,6 +133,23 @@ async function buildIndex() {
   }))
 }
 
+/** 开着开关、且有过期索引且当前没在跑 —— 就自动跑一次增量更新。 */
+async function autoRefreshStale() {
+  if (!autoRefresh.value || running.value || !status.value.enabled) return
+  const stale = (status.value.roots || []).filter(root => root.stale).map(root => root.path)
+  if (!stale.length) return
+  await run(() => startSearchIndex({ paths: stale, excludes: excludes.value }))
+}
+
+function onAutoRefreshChange(value) {
+  try {
+    localStorage.setItem(AUTO_REFRESH_KEY, value ? '1' : '0')
+  } catch {
+    /* 隐私模式等拿不到，忽略即可 */
+  }
+  if (value) autoRefreshStale()
+}
+
 async function search() {
   if (!canSearch.value) return
   searching.value = true
@@ -160,6 +186,7 @@ watch(() => job.value?.status, value => {
 onMounted(async () => {
   await loadConfig().catch(() => {})
   await loadStatus()
+  await autoRefreshStale()
 })
 </script>
 
@@ -229,6 +256,13 @@ onMounted(async () => {
         show-icon
         :title="staleNote"
       />
+
+      <div class="auto-refresh-row">
+        <el-checkbox v-model="autoRefresh" @change="onAutoRefreshChange">
+          进页面时自动更新过期索引
+        </el-checkbox>
+        <span class="auto-refresh-row__note">增量更新，只重读变化的文件；关闭时只提示、不自动跑</span>
+      </div>
 
       <div class="root-list">
         <div v-for="root in status.roots" :key="root.id" class="root-item">
@@ -457,5 +491,19 @@ onMounted(async () => {
   color: var(--ink);
   font-weight: 600;
   border-radius: 3px;
+}
+
+/* 自动增量更新开关：与陈旧告警同一块，说明放同一行 */
+.auto-refresh-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 8px 0 4px;
+}
+
+.auto-refresh-row__note {
+  color: var(--ink-3);
+  font-size: var(--fs-note);
 }
 </style>
