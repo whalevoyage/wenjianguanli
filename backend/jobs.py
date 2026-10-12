@@ -73,6 +73,32 @@ def new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+# 只在「当次结果」里有意义、却不该进历史/列表的巨型字段。
+#
+# 典型是 scan 的 `result.dir_sizes`——「每个目录一条」的大小表，扫一整块盘能到几万条、
+# 几 MB（实测扫 D:\ 5.46 MB / 44,845 项）。前端**从来不用它**（只有点「保存当前为快照」
+# 那一刻用，而那条走的是前端内存里的当次结果，不读 job），快照 diff 读的也是快照文件。
+# 它却会被 persist 进 jobs 表、再被 `GET /api/jobs` 原样带出去 ——
+# 2026-10-13 实测：列表里带上这么一条 5.5 MB 的结果后，/api/jobs 直接 500，任务中心整个打不开。
+HEAVY_RESULT_FIELDS = ("dir_sizes",)
+
+
+def _trim_job(job: dict) -> dict:
+    """落库 / 读入前裁掉巨型字段。
+
+    **不删任务、不动其它字段**，只把 `result.dir_sizes` 这类"当次才用"的表去掉；
+    内存里那份（SSE 推给前端、供「保存为快照」用）保持完整。
+    """
+    result = job.get("result")
+    if not isinstance(result, dict):
+        return job
+    if not any(result.get(field) for field in HEAVY_RESULT_FIELDS):
+        return job
+    trimmed = dict(job)
+    trimmed["result"] = {key: value for key, value in result.items() if key not in HEAVY_RESULT_FIELDS}
+    return trimmed
+
+
 def _blank_job(job_type: str, title: str, target: str, params: dict) -> dict:
     return {
         "id": new_id(),
@@ -213,13 +239,19 @@ class JobManager:
                 if job.get("status") in {JOB_PENDING, JOB_RUNNING, JOB_WAITING}:
                     job["status"] = JOB_FAILED
                     job["error"] = "程序重启，任务已中断"
-                self._jobs[job["id"]] = job
+                # 读入也裁一遍：老库里可能已经躺着几条几 MB 的 dir_sizes（自愈，不删任务）
+                self._jobs[job["id"]] = _trim_job(job)
                 self._order.append(job["id"])
 
     def _persist(self) -> None:
         with self._lock:
             ordered = [self._jobs[i] for i in self._order if i in self._jobs]
-        database.replace_jobs(config.DATABASE_FILE, ordered[-config.MAX_JOBS_KEPT:], config.MAX_JOBS_KEPT)
+        # 落库前裁掉 dir_sizes 这类巨型字段：DB 不膨胀，/api/jobs 也不会被带崩
+        database.replace_jobs(
+            config.DATABASE_FILE,
+            [_trim_job(item) for item in ordered[-config.MAX_JOBS_KEPT:]],
+            config.MAX_JOBS_KEPT,
+        )
 
     # -- 查询 -------------------------------------------------------------
     def get(self, job_id: str) -> dict:
