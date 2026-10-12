@@ -47,6 +47,14 @@ permission_*.png
 perm_diag*.png
 flow_*.png
 
+# 根目录的 UI 迭代截图：证据图统一放 docs/images/，根目录不再入库
+/allin_*.png
+/round2_*.png
+/space_viz_*.png
+/job_progress_*.png
+/handoff_*.png
+/logs_tab_*.jpg
+
 # 临时交接件（用完即弃）
 HANDOFF.md
 
