@@ -16,7 +16,7 @@ defineEmits(['dismiss'])
 <template>
   <div class="handoff" role="status">
     <span class="handoff__text">
-      已带入目录 <strong>{{ path }}</strong><template v-if="from"> · 从{{ from }}带过来</template>
+      已带入目录 <strong>{{ path }}</strong><template v-if="from"> · 从 {{ from }} 带过来</template>
     </span>
     <button type="button" class="handoff__close" @click="$emit('dismiss')">知道了</button>
   </div>
