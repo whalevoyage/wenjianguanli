@@ -600,59 +600,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-/* 相似图片列表：整体比「完全重复」那块更克制 —— 它只是候选，不是结论 */
-.similar-threshold {
-  width: 132px;
-}
-
-.similar-list {
-  display: grid;
-  gap: 16px;
-}
-
-.similar-group {
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  border: 1px solid var(--hairline);
-  border-radius: 12px;
-}
-
-.similar-group__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: var(--fs-body);
-}
-
-.similar-file {
-  display: grid;
-  grid-template-columns: auto minmax(120px, 220px) minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 10px;
-  padding: 5px 8px;
-  border-radius: 8px;
-  font-size: var(--fs-note);
-}
-
-.similar-file.is-keep {
-  background: var(--inset);
-}
-
-.similar-file__name {
-  overflow: hidden;
-  color: var(--ink);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.similar-file__meta,
-.similar-file__mark {
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
 
 .sticky-bar {
   display: flex;

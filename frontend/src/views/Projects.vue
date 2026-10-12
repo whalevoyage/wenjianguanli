@@ -39,6 +39,7 @@ const primaryPath = computed(() => paths.value[0] || '')
  */
 const nextSteps = [
   { name: 'migrate', label: '迁到别的盘' },
+  { name: 'backup', label: '备份' },
   { name: 'junk', label: '清理构建产物' },
   { name: 'space', label: '空间地图' },
 ]

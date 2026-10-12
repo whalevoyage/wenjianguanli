@@ -4,6 +4,8 @@ import { Box, Files, FolderDelete, FolderOpened } from '@element-plus/icons-vue'
 import { startBackup } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
+import { useHandoffTarget } from '../composables/useHandoff'
+import HandoffNote from '../components/HandoffNote.vue'
 import JobProgress from '../components/JobProgress.vue'
 import StatCard from '../components/StatCard.vue'
 import TargetPicker from '../components/TargetPicker.vue'
@@ -13,6 +15,8 @@ const { config, excludes, load: loadConfig } = useConfig()
 const { job, running, run, cancel, rollback } = useJob('backup')
 
 const sources = ref([])
+/* 跨页接力：从别的页面带着目录过来时，追加进列表（不自动开跑） */
+const { handed, from } = useHandoffTarget(sources, { multiple: true })
 const dest = ref('')
 
 const summary = computed(() => {
@@ -71,6 +75,8 @@ onMounted(async () => {
   <div class="section-stack form-page">
 
     <section class="app-card panel-card">
+      <HandoffNote v-if="handed" :path="handed" :from="from" @dismiss="handed = ''" />
+
       <TargetPicker
         :multiple="true"
         v-model:paths="sources"

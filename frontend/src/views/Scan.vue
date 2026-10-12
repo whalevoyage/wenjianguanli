@@ -26,6 +26,7 @@ const { handed, from } = useHandoffTarget(paths, { multiple: true })
 const nextSteps = [
   { name: 'duplicates', label: '查重' },
   { name: 'junk', label: '清理' },
+  { name: 'backup', label: '备份' },
   { name: 'space', label: '空间地图' },
 ]
 const primaryPath = computed(() => paths.value[0] || '')

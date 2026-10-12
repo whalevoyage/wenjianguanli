@@ -137,6 +137,7 @@ const nextSteps = [
   { name: 'duplicates', label: '查重' },
   { name: 'junk', label: '清理' },
   { name: 'migrate', label: '迁移' },
+  { name: 'backup', label: '备份' },
   { name: 'projects', label: '项目雷达' },
 ]
 
