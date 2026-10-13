@@ -73,6 +73,12 @@ SYSTEM_PROMPT = """你是 Atlas 通用助手，优先帮助用户完成文件管
 - trash_restore   把隔离区里的文件恢复回原位置
 - job_cancel      取消当前正在运行的任务
 - job_rollback    回滚最近一次可回滚的任务
+- similar_scan    查找相似图片（缩过/压过/另存过的同一张）
+- similar_clean   清理相似图片（每组保留一张，其余先进隔离区）
+- large_scan      查找大文件
+- large_clean     清理大文件（先进隔离区、可恢复）
+- search_index    为目录建立全文检索索引
+- trash_purge     彻底删除隔离区内容（**不可恢复**，全项目唯一的物理删除口）
 
 输出格式严格为：
 {"goal": "一句话目标", "action": "junk_clean", "reason": "一句话说明",
@@ -723,8 +729,12 @@ def plan_preview(message: str, context: dict | None = None) -> dict:
     if local:
         plan = normalize(local, text, runtime)
     elif resolve_key():
-        result = _call_deepseek(text, runtime)
-        plan = sanitize_plan(result["plan"], text, runtime)
+        # 2026-10-13：先试 function calling（说人话就能识别），不行退回 JSON 计划路
+        tool_plan, answer, _tokens = _deepseek_plan_or_answer(text, runtime)
+        if answer:
+            return {**answer, "conversation_id": _conversation_id(context)}
+        plan = tool_plan if tool_plan is not None else sanitize_plan(
+            _call_deepseek(text, runtime)["plan"], text, runtime)
     else:
         return fallback_clarify(text)
 
@@ -930,16 +940,26 @@ def sanitize_plan(plan: dict, message: str = "", context: dict | None = None) ->
         elif key == "keep":
             if value in ("newest", "original"):
                 params[key] = value
+        elif key in ("paths", "ids", "exclude_paths", "blocked_paths", "exclude_names"):
+            # 列表型参数：逐项清洗。空列表视为没传（别把 "[]" 当成真参数传下去）
+            items = value if isinstance(value, (list, tuple)) else [value]
+            cleaned = [str(item).strip().strip('"') for item in items if str(item).strip()]
+            if cleaned:
+                params[key] = cleaned
         else:
             params[key] = str(value).strip().strip('"').rstrip("\\/") or None
             if not params[key]:
                 params.pop(key)
 
     # 源路径必须真实存在：防模型编造路径，也把「路径不存在」提前到计划阶段暴露
-    missing = [
-        key for key in PATH_PARAMS.get(action, [])
-        if not params.get(key) or not os.path.exists(params[key])
-    ]
+    def _path_ok(key: str) -> bool:
+        value = params.get(key)
+        if not value:
+            return False
+        candidates = value if isinstance(value, (list, tuple)) else [value]
+        return all(os.path.exists(item) for item in candidates)
+
+    missing = [key for key in PATH_PARAMS.get(action, []) if not _path_ok(key)]
     reason = plan.get("reason") or "已生成计划"
     if missing and action != "backup":
         reason = f"{reason}（{'、'.join(missing)} 路径不存在或没提到）"
@@ -1071,6 +1091,65 @@ def parse_local(message: str, context: dict | None = None) -> dict | None:
             "label": "清理重复文件",
             "reason": "命中本地规则：重复文件清理（只删多余副本，先进隔离区）",
             "params": {"path": first, **filters},
+            "needs_path": not first,
+        }
+
+    # ---- 2026-10-13「能力放开」新增的本地规则 ----
+    # 相似图片：相似 ≠ 相同，所以只"找"不给"立即清"——清单必须逐张看
+    if re.search(r"相似", text) and not re.search(r"(立即|直接|确认|执行|删掉|清除|清理|去掉)", text):
+        return {
+            "action": "similar_scan",
+            "label": "查找相似图片",
+            "reason": "先分组展示，相似不等于相同，删哪张得你逐张确认",
+            "params": {"path": first, **filters},
+            "needs_path": not first,
+        }
+
+    if re.search(r"(删掉|清除|清理|去掉|删了|只留|只保留)", text) and re.search(r"相似", text):
+        return {
+            "action": "similar_clean",
+            "label": "清理相似图片",
+            "reason": "命中本地规则：相似图片清理（每组保留一张，其余先进隔离区）",
+            "params": {"path": first, **filters},
+            "needs_path": not first,
+        }
+
+    # 大文件：默认只列不清（大文件多半是用户数据）
+    if re.search(r"大文件", text) and not re.search(r"(立即|直接|确认|执行|删掉|清除|清理|去掉)", text):
+        return {
+            "action": "large_scan",
+            "label": "查找大文件",
+            "reason": "先列出大文件清单，确认后再决定清哪些",
+            "params": {"path": first, **filters},
+            "needs_path": not first,
+        }
+
+    if re.search(r"(删掉|清除|清理|去掉|删了)", text) and re.search(r"大文件", text):
+        return {
+            "action": "large_clean",
+            "label": "清理大文件",
+            "reason": "命中本地规则：大文件清理（先进隔离区、可恢复）",
+            "params": {"path": first, **filters},
+            "needs_path": not first,
+        }
+
+    # 隔离区彻底删除：全项目唯一的物理删除口，必须显式说出"彻底"
+    if re.search(r"(彻底删除|清空隔离区|清空回收站|物理删除)", text):
+        return {
+            "action": "trash_purge",
+            "label": "彻底删除隔离区内容",
+            "reason": "命中本地规则：彻底删除隔离区（**不可恢复**，会先列出将删的内容）",
+            "params": {"all": True},
+            "needs_path": False,
+        }
+
+    # 建索引
+    if re.search(r"(建立|建一下|重建|更新).{0,4}(索引|检索)", text):
+        return {
+            "action": "search_index",
+            "label": "建立全文索引",
+            "reason": "命中本地规则：建立/更新全文检索索引（只读文件，不动任何文件）",
+            "params": {"paths": [first] if first else []},
             "needs_path": not first,
         }
 
@@ -1434,6 +1513,164 @@ def _call_deepseek(message: str, context: dict) -> dict:
     return {"plan": plan, "tokens": int(usage.get("total_tokens") or 0)}
 
 
+# ---------------------------------------------------------------------------
+# 2026-10-13「能力放开」：function calling
+#
+# 老路是让模型背一份 action 白名单、输出 JSON —— 用户得说中固定话术才动。
+# 新路把工具注册表做成 schema 喂给它，让它自己选工具、填参数，说人话就行。
+#
+# ★ 模型只是「理解」，不是「执行」：它返回的 tool_calls 还要过
+#   normalize_steps（工具名必须在册 + 写动作前强制插 confirm）和
+#   sanitize_plan / normalize（路径必须真实存在）。
+#   编一个工具名 → 直接丢掉；编一个路径 → 计划阶段就报"路径不存在"。
+# ---------------------------------------------------------------------------
+
+TOOLS_SYSTEM_PROMPT = """你是 Atlas 的文件管理助手。用户会用大白话提需求，你负责**调用工具**，不要自己编造步骤或参数。
+
+规则：
+- 只调用下面提供的工具；需要多个步骤就调多个（先查后清、先扫描再确认）。
+- 涉及删除 / 移动 / 备份等写操作，照常选对应工具——执行前系统会强制让用户确认，你不用替用户决定。
+- 路径从用户原话里提取；用户没说路径就不要猜，留空即可。
+- 如果需求只是查一下（扫描 / 检索 / 看回收站），直接调用对应查询工具。
+- 普通问答（不涉及文件管理）就不要调工具。"""
+
+
+def _call_deepseek_tools(message: str, context: dict) -> dict:
+    """带工具调用的模型调用。返回 {tool_calls: [{name, arguments}], tokens: int}。"""
+    from .agent_tools import tool_schemas
+
+    key = resolve_key()
+    if not key:
+        raise RuntimeError("未配置 DEEPSEEK_API_KEY")
+
+    body = json.dumps({
+        "model": resolve_model(),
+        "messages": [
+            {"role": "system", "content": TOOLS_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(
+                {"message": message, "context": context}, ensure_ascii=False)},
+        ],
+        "tools": tool_schemas(),
+        "tool_choice": "auto",
+        "temperature": 0,
+        "max_tokens": 800,
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        DEEPSEEK_URL,
+        data=body,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "ignore")[:200]
+        raise RuntimeError(f"DeepSeek 调用失败（{exc.code}）：{detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"无法连接 DeepSeek：{exc.reason}") from exc
+
+    message_obj = (payload.get("choices") or [{}])[0].get("message", {}) or {}
+    calls: list[dict] = []
+    for call in message_obj.get("tool_calls") or []:
+        fn = call.get("function") or {}
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+        calls.append({"name": str(fn.get("name") or "").strip(), "arguments": args})
+
+    return {"tool_calls": calls, "tokens": int((payload.get("usage") or {}).get("total_tokens") or 0)}
+
+
+def plan_from_tools(text: str, runtime: dict) -> tuple[dict | None, dict | None]:
+    """tool_calls → (计划, 直接回答)。二选一，另一个为 None。
+
+    - 全是只读工具 → **当场跑掉、直接答**（这些工具本身零 token、纯本地，不需要计划卡）
+    - 含写动作 → 折成计划（步骤会再过 normalize_steps 的本地校验 + 强制 confirm）
+    - 模型不可用 / 没给工具 / 给的全是不认识的工具 → (None, None)，调用方退回老路
+    """
+    from . import agent_tools
+
+    try:
+        result = _call_deepseek_tools(text, runtime)
+    except RuntimeError:
+        return None, None
+
+    known = set(agent_tools.TOOL_REGISTRY) | set(agent_tools.QUERY_TOOLS) | set(agent_tools.HELPER_TOOLS)
+    kept = [c for c in (result.get("tool_calls") or []) if c.get("name") in known]
+    if not kept:
+        return None, None
+
+    tokens = int(result.get("tokens") or 0)
+    writes = [c["name"] for c in kept if c["name"] in agent_tools.WRITE_ACTIONS]
+
+    if not writes:
+        data: dict = {}
+        notes: list[str] = []
+        for call in kept:
+            out = agent_tools.run_tool(call["name"], call.get("arguments") or {})
+            data[call["name"]] = out.get("data") or {}
+            if out.get("note"):
+                notes.append(out["note"])
+        answer = {
+            "source": "deepseek", "tokens": tokens, "type": "query",
+            "message": "；".join(notes) or "已查完，但没有可用信息",
+            "data": data,
+        }
+        return None, answer
+
+    params: dict = {}
+    for call in kept:
+        for key, value in (call.get("arguments") or {}).items():
+            params.setdefault(key, value)
+
+    raw = {
+        "action": writes[0],
+        "actions": writes,
+        "params": params,
+        "steps": [{"tool": c["name"], "output": ""} for c in kept],
+        "goal": text,
+        "reason": "按你的话拆成了可执行步骤（执行前仍需你确认）",
+        "source": "deepseek",
+        "tokens": tokens,
+        "needs_confirm": True,
+    }
+    plan = normalize(raw, text, runtime)
+    # normalize 只认 action/params，不会把 steps/actions 带进 intent ——
+    # 而 plan_steps / build_proposal 读的正是 intent，所以这里补挂回去。
+    intent = plan.get("intent") if isinstance(plan.get("intent"), dict) else {}
+    intent["steps"] = raw["steps"]
+    intent["actions"] = writes
+    plan["intent"] = intent
+    return plan, None
+
+
+def _deepseek_plan_or_answer(text: str, runtime: dict) -> tuple[dict | None, dict | None, int]:
+    """模型路：先试 function calling（能理解人话），不行退回老路 JSON 计划。
+
+    返回 (plan, answer, tokens)：plan 非空走计划卡；answer 非空是纯查询的直接答复；
+    两个都空表示模型路整体失败（调用方走 fallback）。
+    """
+    plan, answer = plan_from_tools(text, runtime)
+    if answer is not None:
+        return None, answer, int(answer.get("tokens") or 0)
+    if plan is not None:
+        return plan, None, int(plan.get("tokens") or 0)
+
+    # function calling 没成（没配 key / 模型没调工具 / 给的全不认识）→ 退回原 JSON 路
+    try:
+        result = _call_deepseek(text, runtime)
+    except RuntimeError:
+        return None, None, 0
+    return sanitize_plan(result["plan"], text, runtime), None, int(result["tokens"] or 0)
+
+
 def status() -> dict:
     configured = bool(resolve_key())
     return {
@@ -1482,15 +1719,20 @@ def chat(message: str, context: dict | None = None) -> dict:
         return finish(payload)
 
     if resolve_key():
-        result = _call_deepseek(text, context)
-        plan = sanitize_plan(result["plan"], text, context)
+        # 2026-10-13「能力放开」：先试 function calling（说人话就能识别），
+        # 它不成就退回原来的 JSON 计划路 —— 行为不会比现在差。
+        plan, answer, tokens = _deepseek_plan_or_answer(text, context)
+        if answer:
+            return finish(answer)
+        if plan is None:
+            return finish(fallback_clarify(text))
         if plan.get("action") == "none":
             # 模型也没给出可执行计划 → 一样给选项，别只丢一句话
-            return finish(none_payload(plan, text, "deepseek", result["tokens"]))
+            return finish(none_payload(plan, text, "deepseek", tokens))
         _remember_intent(conversation_id, plan, text)
         return finish({
-            "source": "deepseek",
-            "tokens": result["tokens"],
+            "source": plan.get("source") or "deepseek",
+            "tokens": tokens,
             "message": plan.get("reason") or "已生成计划",
             "plan": plan,
             "intent": intent_view(plan.get("intent") or {}),
@@ -1699,6 +1941,32 @@ def stream_chat(message: str, context: dict | None = None):
         for piece in _chunks(payload["message"]):
             yield {"type": "delta", "text": piece}
         yield {"type": "done", "payload": finalize(payload)}
+        return
+
+    # 2026-10-13「能力放开」：先试 function calling（说人话就能识别，不必命中固定话术）。
+    # 它不认 / 不可用 → 落回下面原来的流式 JSON 计划路，行为不会比现在差。
+    tool_plan, tool_answer = plan_from_tools(text, context)
+    if tool_answer:
+        yield {"type": "phase", "text": "已选好查询工具"}
+        for piece in _chunks(tool_answer.get("message") or ""):
+            yield {"type": "delta", "text": piece}
+        yield {"type": "done", "payload": finalize(tool_answer)}
+        return
+    if tool_plan:
+        yield {"type": "phase", "text": "已选好工具"}
+        for piece in _chunks(tool_plan.get("reason") or ""):
+            yield {"type": "delta", "text": piece}
+        _remember_intent(conversation_id, tool_plan, text)
+        yield {"type": "done", "payload": finalize({
+            "source": "deepseek",
+            "tokens": tool_plan.get("tokens") or 0,
+            "message": tool_plan.get("reason") or "已生成计划",
+            "plan": tool_plan,
+            "intent": intent_view(tool_plan.get("intent") or {}),
+            "steps": steps_for(tool_plan),
+            "needs_path": tool_plan.get("needs_path", False),
+            "hint": "本回答消耗了 token；确认后执行由本地完成。",
+        })}
         return
 
     yield {"type": "phase", "text": "查询 DeepSeek"}

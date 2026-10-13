@@ -492,7 +492,10 @@ def derive_missing(action: str, params: dict) -> list[str]:
         value = params.get(key)
         if not value:
             missing.append(key)
-        elif not os.path.exists(value):
+            continue
+        # 列表型参数（paths / ids）逐项查，别把 list 直接喂给 os.path.exists
+        candidates = value if isinstance(value, (list, tuple)) else [value]
+        if not all(os.path.exists(item) for item in candidates):
             missing.append(key)
     return missing
 
@@ -537,6 +540,12 @@ def compute_risk(action: str, params: dict, constraints: dict, estimate: dict | 
     if action == "trash_restore":
         return "low", "从隔离区往回恢复，不会删除任何文件"
 
+    # 2026-10-13「能力放开」：隔离区彻底删除 = 全项目唯一的物理删除口，**不可回滚**
+    if action == "trash_purge":
+        count = int((estimate or {}).get("file_count") or 0)
+        return "high", (f"将物理删除隔离区 {count} 项，**不可恢复**（隔离区是最后一道缓冲，删了就没了）"
+                        if count else "将物理删除隔离区内容，**不可恢复**")
+
     for key in ("path", "source_dir", "target_dir", "dest_dir"):
         value = params.get(key)
         if not value:
@@ -551,6 +560,10 @@ def compute_risk(action: str, params: dict, constraints: dict, estimate: dict | 
 
     if action == "migrate_execute":
         return "medium", "会复制并校验后删除源文件，全程有隔离区兜底"
+
+    # 相似图 / 大文件：动的是用户数据（不是垃圾），提醒语要说清"删的是你的文件"
+    if action in ("similar_clean", "large_clean"):
+        return "medium", "会删除你选中的文件（先进隔离区、可恢复）；这些不是垃圾，删前请看清清单"
 
     mib = constraints.get("min_size_mb")
     hint = f"（仅处理 ≥ {mib} MB 的对象）" if mib else ""

@@ -163,6 +163,25 @@ def _step_params(step: dict, intent: dict) -> dict:
             "min_size": min_size,
             "include_ext": params.get("extensions") or [],
         }
+    # ---- 2026-10-13「能力放开」新增 ----
+    if tool == "similar_scan":
+        # min_size 服务层按**字节**收；Agent 侧给 KB，更符合人的说法
+        min_kb = params.get("min_size_kb")
+        return {
+            "path": scope,
+            "threshold": max(0, min(int(params.get("threshold") or 10), 32)),
+            "min_size": int(min_kb) * 1024 if min_kb else None,
+            "rotations": bool(params.get("rotations")),
+            "excludes": excludes,
+        }
+    if tool == "search_index":
+        paths = params.get("paths") or ([scope] if scope else [])
+        return {"paths": list(paths), "excludes": excludes, "max_depth": params.get("max_depth") or 0}
+    if tool == "trash_purge":
+        return {"ids": list(params.get("ids") or []), "all": bool(params.get("all"))}
+    if tool in ("similar_clean", "large_clean"):
+        # 两种清理都复用 /api/clean：isolate（默认，可还原）或 recycle（系统回收站）
+        return {"mode": params.get("mode") or "isolate"}
     return {}
 
 
@@ -201,7 +220,7 @@ def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: l
         return {}
 
     if kind == "job":
-        from . import clean, duplicates, junk, migrate, scan, virtual
+        from . import clean, duplicates, index, junk, migrate, scan, similar, virtual
 
         step_params = _step_params(step, intent)
         sub = StepContext(parent, step, step_params, index, total)
@@ -216,12 +235,18 @@ def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: l
             return {"result": scan.run_scan(sub)}
         if tool == "virtual_preview":
             return {"result": virtual.run_virtual(sub)}
+        # ---- 2026-10-13「能力放开」新增 ----
+        if tool == "similar_scan":
+            return {"result": similar.run_similar_scan(sub)}
+        if tool == "search_index":
+            return {"result": index.run_index(sub)}
 
         # ---- 执行段：复用既有写通道，隔离区 / 分批 / 回滚一个不少 ----
-        if tool == "clean":
+        # similar_clean / large_clean 与 clean 同一条通道：差别只在清单来源（planner 已分摊）
+        if tool in ("clean", "similar_clean", "large_clean"):
             if not items:
                 return {"result": {"done": 0, "freed": 0, "errors": [], "skipped": "清单为空"}}
-            sub._params = {"items": items, "mode": "isolate"}
+            sub._params = {"items": items, "mode": step_params.get("mode") or "isolate"}
             return {"result": clean.run_clean(sub)}
         if tool == "migrate_execute":
             if not items:
@@ -234,6 +259,18 @@ def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: l
                 "excludes": step_params.get("excludes"),
             }
             return {"result": migrate.run_migrate(sub)}
+        if tool == "trash_purge":
+            # ★ 全项目唯一的物理删除口：不可回滚（job 的回滚帮不上），
+            #   所以它走的是"确认卡逐条列出 + 最高风险等级"那道闸，而不是静默执行。
+            # id 优先取方案清单里的（确认卡上列的就是那些），其次才是参数里显式给的。
+            ids = [item.get("id") for item in items if item.get("id")]
+            if not ids:
+                ids = list(step_params.get("ids") or [])
+            if step_params.get("all") and not ids:
+                ids = [e.get("id") for e in (clean.list_trash().get("entries") or []) if e.get("id")]
+            if not ids:
+                return {"result": {"purged_count": 0, "freed_size_text": "0 B", "skipped": "隔离区是空的"}}
+            return {"result": clean.purge_trash(ids)}
 
         raise ValueError(f"多步骤流水线暂不支持的任务：{tool}")
 

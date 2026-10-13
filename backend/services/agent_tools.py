@@ -18,7 +18,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-from .. import config, fsutil, permissions, store
+from .. import config, database, fsutil, permissions, store
 
 # ---------------------------------------------------------------------------
 # 一、动作白名单（执行工具 / 导航 / 状态页）
@@ -59,6 +59,16 @@ TOOL_REGISTRY = {
     # 这里必须与 WRITE_ACTIONS 保持一致 —— 前端按 WRITE_ACTIONS 判定，两处打架会误导后来人。
     "job_cancel": {"label": "取消任务", "kind": "job", "group": "execute", "write": False},
     "job_rollback": {"label": "回滚任务", "kind": "job", "group": "execute", "write": True},
+    # ---- 2026-10-13「能力放开」：把页面有、Agent 却没有的能力接上 ----
+    # 相似图片：此前 Agent 完全碰不到（应用里的完整功能）
+    "similar_scan": {"label": "查找相似图片", "kind": "job", "group": "query", "write": False},
+    "similar_clean": {"label": "清理相似图片", "kind": "job", "group": "execute", "write": True},
+    # 大文件：此前能列不能清
+    "large_clean": {"label": "清理大文件", "kind": "job", "group": "execute", "write": True},
+    # 全文检索：此前 Agent 用不了
+    "search_index": {"label": "建立全文索引", "kind": "job", "group": "query", "write": False},
+    # 隔离区彻底删除：**全项目唯一的物理删除口**，最高风险
+    "trash_purge": {"label": "彻底删除隔离区内容", "kind": "job", "group": "execute", "write": True},
 }
 
 # 工具分组：与第七阶段计划树里的「输入 / 输出 / 风险」展示一一对应
@@ -67,10 +77,13 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "drive_status", "dir_size", "dir_tree", "type_distribution", "recent_files",
         "large_files", "duplicate_files", "junk_files", "project_dirs",
         "job_status", "trash_contents", "operation_logs",
+        "search", "backup_verify", "snapshot_list", "snapshot_compare",
+        "similar_scan", "search_index",
     ],
     "execute": [
         "virtual_preview", "migrate_plan", "migrate_execute", "junk_clean",
         "duplicate_clean", "backup", "trash_restore", "job_cancel", "job_rollback",
+        "similar_clean", "large_clean", "trash_purge",
     ],
     "helper": [
         "check_disk_space", "check_path_exists", "check_path_protected",
@@ -86,6 +99,8 @@ TOOL_GROUPS: dict[str, list[str]] = {
 WRITE_ACTIONS = {
     "duplicate_clean", "junk_clean", "migrate_execute", "backup",
     "trash_restore", "job_rollback",
+    # 2026-10-13 放开后新增的三个写动作
+    "similar_clean", "large_clean", "trash_purge",
 }
 
 # 每个动作允许的参数键：模型多吐的字段一律丢弃
@@ -105,6 +120,14 @@ ACTION_PARAMS = {
     "trash_restore": {"path"},
     "job_cancel": set(),
     "job_rollback": set(),
+    # ---- 2026-10-13「能力放开」新增动作 ----
+    "similar_scan": {"path", "min_size_kb", "threshold", "rotations"},
+    "similar_clean": {"path", "keep", "min_size_mb", "extensions"},
+    "large_clean": {"path", "min_mb", "limit"},
+    "large_scan": {"path", "min_mb", "limit"},
+    "search_index": {"paths"},
+    # 隔离区彻底删除：要么给 ids，要么 all=True（清空整个隔离区）
+    "trash_purge": {"ids", "all"},
 }
 
 # 需要真实存在的目录（目标目录除外——迁移目标允许尚不存在，由 migrate 服务创建）
@@ -118,6 +141,11 @@ PATH_PARAMS = {
     "backup": ["source_dir"],
     "trash_restore": ["path"],
     "job_cancel": [], "job_rollback": [],
+    # 2026-10-13 新增（trash_purge 不碰用户目录，只按隔离区 id 删）
+    "similar_scan": ["path"], "similar_clean": ["path"], "large_clean": ["path"],
+    "large_scan": ["path"],
+    "search_index": ["paths"],
+    "trash_purge": [],
 }
 
 # 辅助工具的展示元信息，前端计划树按 id 取标题与说明
@@ -143,6 +171,11 @@ QUERY_TOOLS = {
     "job_status": {"label": "查询任务状态", "params": ["limit"]},
     "trash_contents": {"label": "查询回收站内容", "params": ["limit"]},
     "operation_logs": {"label": "查询历史操作记录", "params": ["limit"]},
+    # 2026-10-13「能力放开」补的四个：检索 / 备份核对 / 快照
+    "search": {"label": "全文检索文件内容", "params": ["keyword", "limit"]},
+    "backup_verify": {"label": "核对备份能否还原", "params": ["zip_path", "mode"]},
+    "snapshot_list": {"label": "列出扫描快照", "params": ["root"]},
+    "snapshot_compare": {"label": "对比两个扫描快照", "params": ["root", "base_id", "target_id"]},
 }
 
 # 从目录名反推盘符根，用于「C 盘」这类口语
@@ -511,6 +544,63 @@ def query_operation_logs(limit: int = 20) -> dict:
                    f"共 {len(logs)} 条操作日志")
 
 
+# ---- 2026-10-13「能力放开」补的四个查询工具 ----
+
+def query_search(keyword: str, limit: int = 20) -> dict:
+    """全文检索（只读）。没建过索引会如实说，不让调用方以为"搜过了没结果"。"""
+    from . import index
+
+    if not database.search_available(config.DATABASE_FILE):
+        return _failure("全文检索不可用：当前 SQLite 构建没有编进 FTS5")
+    text = (keyword or "").strip()
+    if len(text) < 1:
+        return _failure("搜索词为空")
+    # 「没有索引」和「索引了但没命中」必须分清：前者该提示去建索引，
+    # 后者是正常结果。query() 的 enabled 只说明 FTS5 编没编入，说明不了有没有建过。
+    if not (index.status().get("roots") or []):
+        return _failure("还没有建立任何索引，先让我建一个再说")
+    data = index.query(text, max(1, min(limit, 100)))
+    results = data.get("results") or []
+    return _result(
+        {"results": results, "count": data.get("total", len(results)), "match": data.get("match")},
+        f"「{text}」命中 {data.get('total', len(results))} 个文件",
+    )
+
+
+def query_backup_verify(zip_path: str, mode: str = "verify") -> dict:
+    """核对备份 ZIP 能否真正还原（只读校验，不写用户文件）。"""
+    from . import backup
+
+    target = (zip_path or "").strip().strip('"')
+    if not target:
+        return _failure("没有给出备份文件路径")
+    if not os.path.exists(target):
+        return _failure(f"找不到备份文件：{target}")
+    return backup.verify_backup_restore(target, mode if mode in ("verify", "restore_test") else "verify")
+
+
+def query_snapshot_list(root: str) -> dict:
+    """列出某个目录的扫描快照（只读）。"""
+    from . import snapshot
+
+    target = (root or "").strip().strip('"')
+    if not target:
+        return _failure("没有给出目录")
+    snaps = snapshot.list_snapshots(target)
+    return _result({"snapshots": snaps, "count": len(snaps), "root": target},
+                   f"{target} 有 {len(snaps)} 份快照")
+
+
+def query_snapshot_compare(root: str, base_id: str, target_id: str) -> dict:
+    """对比两份扫描快照的目录增减（只读）。"""
+    from . import snapshot
+
+    target = (root or "").strip().strip('"')
+    if not target or not base_id or not target_id:
+        return _failure("对比快照需要目录和两个快照 id")
+    return snapshot.compare_snapshots(target, base_id, target_id)
+
+
 # ---------------------------------------------------------------------------
 # 四、辅助工具（6 个，纯本地只读）
 # ---------------------------------------------------------------------------
@@ -650,6 +740,13 @@ def run_tool(name: str, params: dict | None = None) -> dict:
             "job_status": lambda: query_job_status(params.get("limit", 10)),
             "trash_contents": lambda: query_trash_contents(params.get("limit", 20)),
             "operation_logs": lambda: query_operation_logs(params.get("limit", 20)),
+            # 2026-10-13 新增
+            "search": lambda: query_search(params.get("keyword", ""), params.get("limit", 20)),
+            "backup_verify": lambda: query_backup_verify(
+                params.get("zip_path", ""), params.get("mode", "verify")),
+            "snapshot_list": lambda: query_snapshot_list(params.get("root", "")),
+            "snapshot_compare": lambda: query_snapshot_compare(
+                params.get("root", ""), params.get("base_id", ""), params.get("target_id", "")),
         }
         handler = table.get(name)
         if not handler:
@@ -692,3 +789,75 @@ def registry_view() -> dict:
         "execute": {name: TOOL_REGISTRY[name] for name in TOOL_GROUPS["execute"] if name in TOOL_REGISTRY},
         "all_actions": ALLOWED_ACTIONS,
     }
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-13「能力放开」：把工具注册表折成 function-calling schema
+#
+# 目的：让模型用**工具调用**而不是"背一份 action 白名单"来理解用户的话。
+# 好处是它可以说人话（"把桌面那个空文件夹相关的垃圾清一下"）而不必命中固定话术。
+#
+# ★ schema 只是"模型能看见什么"，**不等于"模型能做什么"**：
+#   调用结果回来还要过 normalize_steps（工具名必须在册、写动作前强制插 confirm）
+#   和 sanitize_plan（路径必须真实存在）。模型编一个工具名会被直接丢掉。
+# ---------------------------------------------------------------------------
+
+# 参数名 → JSON Schema 类型。没列到的按 string 处理（宁可松一点，也别把整数拒了）。
+PARAM_TYPES: dict[str, str] = {
+    "path": "string", "paths": "array", "ids": "array", "keyword": "string",
+    "min_mb": "integer", "min_size_mb": "integer", "min_size_kb": "integer",
+    "limit": "integer", "days": "integer", "depth": "integer", "max_depth": "integer",
+    "zombie_days": "integer", "threshold": "integer", "need_mb": "integer",
+    "items": "integer", "bytes": "integer",
+    "rotations": "boolean", "all": "boolean",
+    "keep": "string", "mode": "string", "group_by": "string", "route": "string",
+    "source_dir": "string", "target_dir": "string", "dest_dir": "string",
+    "zip_path": "string", "root": "string", "base_id": "string", "target_id": "string",
+    "extensions": "array", "excludes": "array", "action": "string",
+}
+
+# 这些参数没有它工具就跑不了 → 标 required，让模型别漏
+_REQUIRED_EXTRA: dict[str, set[str]] = {
+    "search": {"keyword"},
+    "backup_verify": {"zip_path"},
+    "snapshot_list": {"root"},
+    "snapshot_compare": {"root", "base_id", "target_id"},
+    "open_tab": {"route"},
+}
+
+
+def _param_schema(key: str) -> dict:
+    kind = PARAM_TYPES.get(key, "string")
+    if kind == "array":
+        return {"type": "array", "items": {"type": "string"},
+                "description": "字符串列表"}
+    if kind == "integer":
+        return {"type": "integer"}
+    if kind == "boolean":
+        return {"type": "boolean"}
+    return {"type": "string"}
+
+
+def _tool_schema(name: str, label: str, keys) -> dict:
+    props = {key: _param_schema(key) for key in keys}
+    required = sorted(set(PATH_PARAMS.get(name) or []) | _REQUIRED_EXTRA.get(name, set()))
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": label,
+            "parameters": {"type": "object", "properties": props, "required": required},
+        },
+    }
+
+
+def tool_schemas() -> list[dict]:
+    """全部工具的 function-calling schema（动作 + 查询 + 辅助）。"""
+    out: list[dict] = []
+    for name, meta in TOOL_REGISTRY.items():
+        out.append(_tool_schema(name, meta["label"], sorted(ACTION_PARAMS.get(name) or [])))
+    for name, meta in QUERY_TOOLS.items():
+        out.append(_tool_schema(name, meta["label"], meta.get("params") or []))
+    for name, meta in HELPER_TOOLS.items():
+        out.append(_tool_schema(name, meta["label"], meta.get("params") or []))
+    return out
