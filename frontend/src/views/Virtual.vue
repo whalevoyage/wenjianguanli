@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Coin, Files, FolderOpened, Grid, Lock, PieChart, Sort, Timer, Warning } from '@element-plus/icons-vue'
-import { exportVirtual, startMigrate, startVirtual } from '../api/filepilot'
+import { applyVirtual, exportVirtual, startMigrate, startVirtual } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
 import { useJob } from '../composables/useJob'
 import NextSteps from '../components/NextSteps.vue'
@@ -13,7 +13,7 @@ import EmptyState from '../components/EmptyState.vue'
 import JobProgress from '../components/JobProgress.vue'
 import StatCard from '../components/StatCard.vue'
 import TargetPicker from '../components/TargetPicker.vue'
-import { formatCount, formatDuration } from '../utils/formatters'
+import { formatBytes, formatCount, formatDuration } from '../utils/formatters'
 
 /**
  * 整理预览：只生成「整理后会是什么样」，一个字节都不动。
@@ -25,6 +25,7 @@ const { config, excludes, load: loadConfig } = useConfig()
 const preview = useJob('virtual.preview')
 const planJob = useJob('virtual.plan')
 const execJob = useJob('virtual.exec')
+const inPlaceJob = useJob('virtual.inplace')
 
 const path = ref('')
 const groupBy = ref('type')
@@ -176,6 +177,22 @@ const planItems = computed(() => {
   return items
 })
 
+/** 就地整理的清单：目标位置直接用预览给出的 preview_target —— 就在原目录下的分组子目录里，不换盘 */
+const inPlaceItems = computed(() => {
+  const data = result.value
+  if (!data) return []
+  const items = []
+  for (const bucket of data.buckets) {
+    for (const item of bucket.items) {
+      items.push({ source: item.path, target: item.preview_target, size: item.size })
+    }
+  }
+  return items
+})
+
+const inPlaceSizeText = computed(() =>
+  formatBytes(inPlaceItems.value.reduce((sum, item) => sum + (item.size || 0), 0)))
+
 function toggle(key) {
   openKeys.value = openKeys.value.includes(key)
     ? openKeys.value.filter(item => item !== key)
@@ -278,6 +295,28 @@ async function runOrganize() {
     items: planItems.value,
   }))
   if (job) ElMessage.success('整理任务已启动，复制与校验会同步显示进度')
+}
+
+/** 就地整理：不另挑目标盘，直接把文件移进原目录下的分组子目录（只移动、不删除、可回滚） */
+async function runInPlace() {
+  const items = inPlaceItems.value
+  if (!items.length) return
+  try {
+    await ElMessageBox.confirm(
+      `将 ${formatCount(items.length)} 个文件（${inPlaceSizeText.value}）移动到本目录下的分组子目录。`
+      + '只移动、不删除任何文件；执行后可在任务页整体回滚。确认继续？',
+      '确认就地整理',
+      { type: 'warning', confirmButtonText: '确认整理', cancelButtonText: '再想想' },
+    )
+  } catch {
+    return
+  }
+  const job = await inPlaceJob.run(() => applyVirtual({
+    path: result.value.root,
+    group_by: result.value.group_by,
+    items,
+  }))
+  if (job) ElMessage.success('就地整理已启动，文件会按分组归位')
 }
 
 watch(() => preview.job.value?.status, (status) => {
@@ -466,6 +505,39 @@ onMounted(async () => {
         </div>
 
         <JobProgress :job="planJob.job.value" :rollbackable="false" @cancel="planJob.cancel" />
+      </section>
+
+      <section class="app-card panel-card">
+        <div class="panel-title-row">
+          <div>
+            <h3 class="panel-title">或者：就地整理（不换盘）</h3>
+          </div>
+          <div class="meta-pill">确认后即移动</div>
+        </div>
+
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="不用另挑目标盘：直接在这个目录里分组建子目录、把文件归位。只移动、不删除，执行后可在任务页整体回滚。"
+        />
+
+        <div class="row-actions">
+          <span class="tree-hint">
+            将把 {{ formatCount(inPlaceItems.length) }} 个文件（{{ inPlaceSizeText }}）移进 {{ path }} 下的分组子目录。
+          </span>
+          <el-button
+            size="large"
+            :icon="Sort"
+            :disabled="!inPlaceItems.length"
+            :loading="inPlaceJob.running.value"
+            @click="runInPlace"
+          >
+            就地整理
+          </el-button>
+        </div>
+
+        <JobProgress :job="inPlaceJob.job.value" @cancel="inPlaceJob.cancel" @rollback="inPlaceJob.rollback" />
       </section>
 
       <template v-if="planResult">

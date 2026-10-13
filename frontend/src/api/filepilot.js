@@ -87,6 +87,7 @@ export const startTree = payload => unwrap(api.post('/tree', payload))
 export const startDuplicateScan = payload => unwrap(api.post('/duplicates/scan', payload))
 export const startJunkScan = payload => unwrap(api.post('/junk/scan', payload))
 export const startVirtual = payload => unwrap(api.post('/virtual/organize', payload))
+export const applyVirtual = payload => unwrap(api.post('/virtual/apply', payload))
 export const exportVirtual = payload => unwrap(api.post('/virtual/export', payload))
 export const startProjectScan = payload => unwrap(api.post('/projects/scan', payload))
 
