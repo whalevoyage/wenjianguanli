@@ -17,6 +17,7 @@
 import { computed, ref, watch } from 'vue'
 import { ElIcon } from 'element-plus'
 import { ArrowRight, Check, Close, Loading, WarningFilled } from '@element-plus/icons-vue'
+import { formatBytes } from '../utils/formatters'
 
 const props = defineProps({
   steps: { type: Array, default: () => [] },
@@ -69,6 +70,21 @@ const activeIndex = computed(() => {
 
 const estimate = computed(() => props.proposal?.executable ? props.proposal : props.estimate || {})
 const estimateKnown = computed(() => Boolean(estimate.value?.freed_text || estimate.value?.item_count))
+
+/** 确认前的逐条清单：最多列 20 条，多的只报个数（不让确认卡被刷屏）。 */
+const ITEM_PREVIEW = 20
+const showItems = ref(false)
+const itemRows = computed(() => (props.proposal?.items || []).slice(0, ITEM_PREVIEW).map((item, index) => {
+  const path = item.path || item.source || ''
+  return {
+    key: item.id || path || `item-${index}`,
+    path,
+    label: path || `（第 ${index + 1} 项）`,
+    size_text: formatBytes(item.size || 0),
+    level: item.level || 'safe',
+  }
+}))
+const restCount = computed(() => Math.max(0, (props.proposal?.items || []).length - ITEM_PREVIEW))
 const canApprove = computed(() => Boolean(props.proposal?.executable) && props.waiting)
 
 /** 按钮行右端的状态说明。只说此刻一定成立的事，不替调用方下结论。 */
@@ -226,6 +242,23 @@ function submitRevise() {
 
       <div v-if="constraintBits.length" class="plan__constraints">
         <span v-for="bit in constraintBits" :key="bit">{{ bit }}</span>
+      </div>
+
+      <!-- 确认前的**逐条清单**：光看"N 项 / 释放 X"不足以让人点头，
+           尤其相似图 / 大文件 / 彻底删除这三种动的是用户数据或不可逆。 -->
+      <div v-if="itemRows.length" class="plan__items">
+        <button type="button" class="plan__items-toggle" @click="showItems = !showItems">
+          {{ showItems ? '收起清单' : `展开清单（${itemRows.length} 项）` }}
+        </button>
+        <ul v-show="showItems" class="plan__items-list">
+          <li v-for="row in itemRows" :key="row.key">
+            <span class="plan__item-path" :title="row.path">{{ row.label }}</span>
+            <span v-if="row.level === 'danger'" class="plan__item-tag is-danger">不可恢复</span>
+            <span v-else-if="row.level !== 'safe'" class="plan__item-tag">需你确认</span>
+            <span class="plan__item-size">{{ row.size_text }}</span>
+          </li>
+        </ul>
+        <p v-if="restCount" class="plan__items-more">还有 {{ restCount }} 项未列出</p>
       </div>
 
       <p v-if="proposal?.note" class="plan__note">{{ proposal.note }}</p>
@@ -561,6 +594,80 @@ function submitRevise() {
 
 .plan__blocked {
   color: var(--warning-ink);
+}
+
+/* 确认前的逐条清单 */
+.plan__items {
+  margin-top: 10px;
+}
+
+.plan__items-toggle {
+  padding: 3px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.plan__items-list {
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+.plan__items-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--hairline);
+  font-size: 12px;
+}
+
+.plan__items-list li:first-child {
+  border-top: 0;
+}
+
+.plan__item-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan__item-size {
+  flex: none;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan__item-tag {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+  font-size: 11px;
+}
+
+.plan__item-tag.is-danger {
+  background: var(--danger-soft);
+  color: var(--danger-ink);
+}
+
+.plan__items-more {
+  margin: 6px 0 0;
+  color: var(--ink-3);
+  font-size: 11px;
 }
 
 .plan__actions {
