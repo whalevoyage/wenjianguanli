@@ -540,6 +540,10 @@ def compute_risk(action: str, params: dict, constraints: dict, estimate: dict | 
     if action == "trash_restore":
         return "low", "从隔离区往回恢复，不会删除任何文件"
 
+    # 2026-10-14：就地整理只移动、不删除，且任务页可整体回滚 —— 风险按 low
+    if action == "virtual_organize":
+        return "low", "只把文件移动到分组子目录，不删除任何东西；任务页可整体回滚"
+
     # 2026-10-13「能力放开」：隔离区彻底删除 = 全项目唯一的物理删除口，**不可回滚**
     if action == "trash_purge":
         count = int((estimate or {}).get("file_count") or 0)
@@ -561,13 +565,18 @@ def compute_risk(action: str, params: dict, constraints: dict, estimate: dict | 
     if action == "migrate_execute":
         return "medium", "会复制并校验后删除源文件，全程有隔离区兜底"
 
-    # 相似图 / 大文件：动的是用户数据（不是垃圾），提醒语要说清"删的是你的文件"
+    # 相似图 / 大文件：动的是用户数据（不是垃圾），提醒语要说清"删的是你的文件"。
+    # 清理类现在是「确认后即永久删」（进隔离区 + 立刻清空同批），不再写"可恢复"。
     if action in ("similar_clean", "large_clean"):
-        return "medium", "会删除你选中的文件（先进隔离区、可恢复）；这些不是垃圾，删前请看清清单"
+        return "medium", "会永久删除你选中的文件，不可恢复；这些不是垃圾，删前请看清清单"
+
+    # 备份是纯产出：只写一份 ZIP，不动任何原文件
+    if action == "backup":
+        return "low", "只会生成一份 ZIP 备份，不动任何原文件"
 
     mib = constraints.get("min_size_mb")
     hint = f"（仅处理 ≥ {mib} MB 的对象）" if mib else ""
-    return "medium", f"会删除文件，但先进隔离区、可恢复{hint}"
+    return "medium", f"确认后即永久删除，不可恢复{hint}"
 
 
 def build_estimate(action: str, params: dict, estimate: dict | None = None) -> dict:

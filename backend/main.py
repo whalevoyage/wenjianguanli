@@ -127,6 +127,13 @@ class VirtualExportRequest(BaseModel):
     items: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class VirtualApplyRequest(BaseModel):
+    """真正整理：用户在预览里确认过的清单（每项 source→target）。"""
+    path: str
+    group_by: str = "type"
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ProjectRequest(BaseModel):
     path: str = ""
     paths: list[str] | None = None
@@ -448,6 +455,18 @@ def start_virtual(request: VirtualRequest):
         raise HTTPException(status_code=400, detail=f"不支持的分组方式：{request.group_by}")
     title = f"{mode['label']}预览 {root}"
     return _launch("virtual", title, str(root), request.model_dump(), virtual.run_virtual)
+
+
+@app.post("/api/virtual/apply")
+def apply_virtual(request: VirtualApplyRequest):
+    """真正整理：把预览确认过的清单落盘（**移动**文件，任务页可整体回滚）。"""
+    try:
+        root = fsutil.resolve_dir(request.path)
+    except (OSError, ValueError) as exc:
+        raise _friendly(exc)
+    if not request.items:
+        raise HTTPException(status_code=400, detail="没有要整理的清单")
+    return _launch("virtual", f"整理 {root}", str(root), request.model_dump(), virtual.run_organize)
 
 
 @app.post("/api/virtual/export")

@@ -1225,8 +1225,12 @@ def parse_local(message: str, context: dict | None = None) -> dict | None:
                 "fields": [{"id": "path", "question": "要整理的目录", "kind": "path"}],
             }
 
-        return {"action": "virtual_preview", "label": "生成整理预览",
-                "reason": "命中本地规则：整理预览",
+        # 「整理预览」= 只看；其它「整理/归置/收拾」= 真执行（流水线仍先预览、再等你确认）
+        preview_only = bool(re.search(r"(预览|只看|看看|看下|生成预览)", text))
+        return {"action": "virtual_preview" if preview_only else "virtual_organize",
+                "label": "生成整理预览" if preview_only else "执行整理",
+                "reason": "命中本地规则：整理预览" if preview_only
+                          else "命中本地规则：整理（先预览，确认后才移动；只移动不删除）",
                 "params": {"path": first, "group_by": group_by},
                 "needs_path": False}
 

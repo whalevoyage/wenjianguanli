@@ -407,3 +407,121 @@ def test_execute_clean_does_not_purge_pre_existing_trash(monkeypatch):
         _params = None
     agent_task._execute_clean(_Sub(), [{"path": "y"}], "isolate")
     assert purged_ids == ["new1"]                        # 只清 new1，old1 不被误删
+
+
+# ---- 八、清理级别放宽：安全级 + 建议确认级都进清单，谨慎级仍排除 ----
+
+def test_proposal_includes_confirm_level_junk_but_not_caution():
+    intent = {"action": "junk_clean", "scope": {"path": "D://X"}, "constraints": {}}
+    steps = {"junk": {"result": {"levels": [
+        {"level": "safe", "items": [{"path": "a.tmp", "size": 10, "rule": "temp"}]},
+        {"level": "confirm", "items": [{"path": "b.log", "size": 20, "rule": "log"}]},
+        {"level": "caution", "items": [{"path": "c.dat", "size": 30, "rule": "misc"}]},
+    ]}}}
+    proposal = agent_planner.build_proposal(intent, steps)
+    assert sorted(i["path"] for i in proposal["items"]) == ["a.tmp", "b.log"]
+    assert proposal["freed_bytes"] == 30
+    levels = {i["path"]: i["level"] for i in proposal["items"]}
+    assert levels["b.log"] == "confirm"          # 如实标注等级，别都写成 safe
+    assert proposal["executable"] is True
+
+
+# ---- 八、清理级别放宽：安全级 + 建议确认级都进清单，谨慎级仍排除 ----
+
+def test_proposal_includes_confirm_level_junk_but_not_caution():
+    intent = {"action": "junk_clean", "scope": {"path": "D:/X"}, "constraints": {}}
+    steps = {"junk": {"result": {"levels": [
+        {"level": "safe", "items": [{"path": "a.tmp", "size": 10, "rule": "temp"}]},
+        {"level": "confirm", "items": [{"path": "b.log", "size": 20, "rule": "log"}]},
+        {"level": "caution", "items": [{"path": "c.dat", "size": 30, "rule": "misc"}]},
+    ]}}}
+    proposal = agent_planner.build_proposal(intent, steps)
+    assert sorted(i["path"] for i in proposal["items"]) == ["a.tmp", "b.log"]
+    assert proposal["freed_bytes"] == 30
+    levels = {i["path"]: i["level"] for i in proposal["items"]}
+    assert levels["b.log"] == "confirm"          # 如实标注等级，别都写成 safe
+    assert proposal["executable"] is True
+
+
+# ---- 九、虚拟整理真执行（Agent 侧）----
+
+def test_virtual_organize_is_a_write_action_with_a_confirm_step():
+    assert "virtual_organize" in agent_tools.ALLOWED_ACTIONS
+    assert "virtual_organize" in agent_tools.WRITE_ACTIONS
+    assert agent_planner.pick_pipeline({"action": "virtual_organize"}) == "organize_write"
+    steps = agent_planner.plan_steps({"action": "virtual_organize", "scope": {"path": "D:/X"}})
+    assert "confirm" in [s["kind"] for s in steps]                 # 动手前必须确认
+    assert any(s["tool"] == "virtual_preview" for s in steps)      # 先出预览
+
+
+def test_virtual_organize_proposal_comes_from_preview_buckets():
+    intent = {"action": "virtual_organize", "scope": {"path": "D:/X"}, "constraints": {}}
+    steps = {"preview": {"result": {"buckets": [
+        {"items": [
+            {"path": "D:/X/a.jpg", "preview_target": "D:/X/按类型/图片/a.jpg", "size": 10},
+            {"path": "D:/X/b.mp4", "preview_target": "D:/X/按类型/视频/b.mp4", "size": 20},
+        ]},
+    ]}}}
+    proposal = agent_planner.build_proposal(intent, steps)
+    assert proposal["item_count"] == 2
+    assert proposal["freed_label"] == "整理体积"                    # 不是"预计释放"
+    assert {(i["source"], i["target"]) for i in proposal["items"]} == {
+        ("D:/X/a.jpg", "D:/X/按类型/图片/a.jpg"),
+        ("D:/X/b.mp4", "D:/X/按类型/视频/b.mp4"),
+    }
+    assert proposal["executable"] is True
+
+
+def test_virtual_organize_execution_step_uses_the_organizer():
+    steps = agent_planner.execution_steps(
+        {"action": "virtual_organize"}, {"action": "virtual_organize"})
+    tools = [s["tool"] for s in steps if s["id"] == "execute"]
+    assert tools == ["virtual_organize"]
+
+
+def test_virtual_organize_risk_is_low():
+    level, reason = agent_intent.compute_risk("virtual_organize", {"path": "D:/X"}, {})
+    assert level == "low"
+    assert "回滚" in reason
+
+
+# ---- 九、虚拟整理真执行（Agent 侧）----
+
+def test_virtual_organize_is_a_write_action_with_a_confirm_step():
+    assert "virtual_organize" in agent_tools.ALLOWED_ACTIONS
+    assert "virtual_organize" in agent_tools.WRITE_ACTIONS
+    assert agent_planner.pick_pipeline({"action": "virtual_organize"}) == "organize_write"
+    steps = agent_planner.plan_steps({"action": "virtual_organize", "scope": {"path": "D:/X"}})
+    assert "confirm" in [s["kind"] for s in steps]                 # 动手前必须确认
+    assert any(s["tool"] == "virtual_preview" for s in steps)      # 先出预览
+
+
+def test_virtual_organize_proposal_comes_from_preview_buckets():
+    intent = {"action": "virtual_organize", "scope": {"path": "D:/X"}, "constraints": {}}
+    steps = {"preview": {"result": {"buckets": [
+        {"items": [
+            {"path": "D:/X/a.jpg", "preview_target": "D:/X/按类型/图片/a.jpg", "size": 10},
+            {"path": "D:/X/b.mp4", "preview_target": "D:/X/按类型/视频/b.mp4", "size": 20},
+        ]},
+    ]}}}
+    proposal = agent_planner.build_proposal(intent, steps)
+    assert proposal["item_count"] == 2
+    assert proposal["freed_label"] == "整理体积"                    # 不是"预计释放"
+    assert {(i["source"], i["target"]) for i in proposal["items"]} == {
+        ("D:/X/a.jpg", "D:/X/按类型/图片/a.jpg"),
+        ("D:/X/b.mp4", "D:/X/按类型/视频/b.mp4"),
+    }
+    assert proposal["executable"] is True
+
+
+def test_virtual_organize_execution_step_uses_the_organizer():
+    steps = agent_planner.execution_steps(
+        {"action": "virtual_organize"}, {"action": "virtual_organize"})
+    tools = [s["tool"] for s in steps if s["id"] == "execute"]
+    assert tools == ["virtual_organize"]
+
+
+def test_virtual_organize_risk_is_low():
+    level, reason = agent_intent.compute_risk("virtual_organize", {"path": "D:/X"}, {})
+    assert level == "low"
+    assert "回滚" in reason

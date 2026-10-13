@@ -34,6 +34,11 @@ ALLOWED_ACTIONS = [
     "jobs_list", "trash_list", "logs_list",
     "duplicate_clean", "junk_clean", "migrate_execute", "backup",
     "trash_restore", "job_cancel", "job_rollback",
+    # 2026-10-13「能力放开」新增（★ 必须在 ACTION_PARAMS 里，sanitize_plan 会取它）
+    "similar_scan", "similar_clean", "large_clean", "large_scan",
+    "search_index", "trash_purge",
+    # 2026-10-14：整理真执行
+    "virtual_organize",
 ]
 
 # 工具注册表：动作名称、用途、分组和风险集中管理，后续新增能力只需扩展这里。
@@ -46,6 +51,8 @@ TOOL_REGISTRY = {
     "scan": {"label": "扫描目录", "kind": "job", "group": "query", "write": False},
     "tree": {"label": "生成空间地图", "kind": "job", "group": "query", "write": False},
     "virtual_preview": {"label": "生成整理预览", "kind": "job", "group": "execute", "write": False},
+    # 2026-10-14：整理真执行（就地移动到分组子目录，只移动不删除、可回滚）
+    "virtual_organize": {"label": "执行整理", "kind": "job", "group": "execute", "write": True},
     "projects_scan": {"label": "扫描项目雷达", "kind": "job", "group": "query", "write": False},
     "duplicate_scan": {"label": "查找重复文件", "kind": "job", "group": "query", "write": False},
     "junk_scan": {"label": "查找垃圾文件", "kind": "job", "group": "query", "write": False},
@@ -81,7 +88,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "similar_scan", "search_index",
     ],
     "execute": [
-        "virtual_preview", "migrate_plan", "migrate_execute", "junk_clean",
+        "virtual_preview", "virtual_organize", "migrate_plan", "migrate_execute", "junk_clean",
         "duplicate_clean", "backup", "trash_restore", "job_cancel", "job_rollback",
         "similar_clean", "large_clean", "trash_purge",
     ],
@@ -101,6 +108,8 @@ WRITE_ACTIONS = {
     "trash_restore", "job_rollback",
     # 2026-10-13 放开后新增的三个写动作
     "similar_clean", "large_clean", "trash_purge",
+    # 2026-10-14：就地整理（只移动、不删除、可回滚），但仍是真动文件
+    "virtual_organize",
 }
 
 # 每个动作允许的参数键：模型多吐的字段一律丢弃
@@ -108,6 +117,7 @@ ACTION_PARAMS = {
     "open_tab": {"route", "path"}, "overview": set(), "jobs_list": set(), "trash_list": set(), "logs_list": set(),
     "scan": {"path", "min_size_mb", "extensions"},
     "virtual_preview": {"path", "group_by", "min_size_mb"},
+    "virtual_organize": {"path", "group_by"},
     "projects_scan": {"path", "zombie_days", "max_depth"},
     "tree": {"path", "min_size_mb", "extensions"},
     "duplicate_scan": {"path", "min_size_mb", "extensions"},
@@ -134,7 +144,7 @@ ACTION_PARAMS = {
 PATH_PARAMS = {
     "open_tab": [], "overview": [], "jobs_list": [], "trash_list": [], "logs_list": [],
     "scan": ["path"], "tree": ["path"],
-    "virtual_preview": ["path"], "projects_scan": ["path"],
+    "virtual_preview": ["path"], "virtual_organize": ["path"], "projects_scan": ["path"],
     "duplicate_scan": ["path"], "junk_scan": ["path"],
     "duplicate_clean": ["path"], "junk_clean": ["path"],
     "migrate_plan": ["source_dir"], "migrate_execute": ["source_dir"],

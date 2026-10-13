@@ -152,6 +152,8 @@ def _step_params(step: dict, intent: dict) -> dict:
             "min_size": min_size,
             "excludes": excludes,
         }
+    if tool == "virtual_organize":
+        return {"path": scope, "group_by": params.get("group_by") or "type"}
     if tool in ("migrate_plan", "migrate_execute"):
         return {
             "source_dir": scope,
@@ -265,6 +267,16 @@ def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: l
             return {"result": scan.run_scan(sub)}
         if tool == "virtual_preview":
             return {"result": virtual.run_virtual(sub)}
+        # 整理真执行：清单（source→target）来自确认过的方案，只移动不删除、可回滚
+        if tool == "virtual_organize":
+            if not items:
+                return {"result": {"moved_count": 0, "skipped_count": 0, "errors": [], "skipped": "清单为空"}}
+            sub._params = {
+                "path": step_params.get("path"),
+                "group_by": step_params.get("group_by") or "type",
+                "items": items,
+            }
+            return {"result": virtual.run_organize(sub)}
         # ---- 2026-10-13「能力放开」新增 ----
         if tool == "similar_scan":
             return {"result": similar.run_similar_scan(sub)}

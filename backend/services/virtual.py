@@ -1,18 +1,23 @@
-"""虚拟整理预览：把文件按类型 / 时间 / 体积 / 项目聚成「假想整理后」的结构。
+"""虚拟整理：预览（只读）+ 真执行（写）。
 
-硬约束：这个模块**只读**。
-它只做 stat 与分组，不创建目录、不移动、不删除、不写任何文件。
-界面上的「整理后的样子」全部活在内存里；真要动手必须由用户确认后交给 migrate
-（复制 → 逐文件校验 → 校验通过才删源，可回滚）。
+- `run_virtual` / `export_manifest`：**只读**。只做 stat 与分组，界面上的「整理后的样子」
+  全部活在内存里，不创建目录、不移动、不删除。
+- `run_organize`（2026-10-14 新增）：**写**。用户在预览上确认后，把文件**移动**进各分组
+  子目录。注意它**只移动、不删除**，每个文件记一条 `{"op":"move"}` 动作 —— 任务页可整体回滚。
+
+为什么不复用 `migrate`：migrate 有「目标不能落在来源内」的检查，而整理的目标
+（`root/按类型/图片` 之类）**天然就在来源 root 里面**，那条检查会直接拒掉。
+所以就地整理必须有个自己的执行器，但安全语义保持一致（逐条校验 + 可回滚 + 只移动）。
 """
 from __future__ import annotations
 
 import os
+import shutil
 import time
 from collections import defaultdict
 from pathlib import Path
 
-from .. import config, fsutil
+from .. import config, fsutil, permissions
 from ..jobs import JobContext
 
 MODE_BY_ID = {mode["id"]: mode for mode in config.VIRTUAL_GROUP_MODES}
@@ -240,6 +245,101 @@ def run_virtual(ctx: JobContext) -> dict:
 
 def _fmt_time(ts: float) -> str:
     return fsutil.format_mtime(ts)
+
+
+# ---------------------------------------------------------------------------
+# 真执行：把预览的「假想结构」落盘（移动，不删除）
+# ---------------------------------------------------------------------------
+
+def run_organize(ctx: JobContext) -> dict:
+    """按预览的分组把文件**移动**进目标子目录。
+
+    安全语义与其它写操作一致：
+    - **只移动、不删除**，每个文件一条 `{"op":"move","from","to"}` —— 任务页可整体回滚；
+    - 逐条校验：目标必须落在本次整理的根目录内（防 `..` 越界 / 联接绕过），
+      源不存在或已在目标位就跳过；
+    - 目标重名走 `ensure_unique` 加序号，**不覆盖**任何既有文件。
+    """
+    params = ctx.params
+    root = fsutil.resolve_dir(params.get("path", ""))
+    raw_items = params.get("items") or []
+    if not raw_items:
+        raise ValueError("没有要整理的清单 —— 先在预览里确认要整理哪些，再执行")
+
+    permission = permissions.current()
+    fsutil.assert_writable(root, permission)
+    root_resolved = root.resolve()
+
+    started = time.perf_counter()
+    total = len(raw_items)
+    moved = 0
+    skipped = 0
+    moved_size = 0
+    errors: list[str] = []
+    actions: list[dict] = []
+    flushed = 0
+
+    ctx.phase(0, f"准备整理 {total} 个文件")
+    for index, item in enumerate(raw_items, start=1):
+        ctx.check_cancel()
+        src_raw = item.get("source") or item.get("path")
+        dst_raw = item.get("target") or item.get("preview_target")
+        if not src_raw or not dst_raw:
+            errors.append("缺少源路径或目标路径，已跳过")
+            continue
+
+        src, dst = Path(src_raw), Path(dst_raw)
+        # 目标必须落在整理根目录内：`..` 越界、指向外部的联接都在这里被挡下
+        try:
+            dst.resolve().relative_to(root_resolved)
+        except ValueError:
+            errors.append(f"{src.name}：目标不在整理目录内，已跳过")
+            continue
+
+        if not src.exists():
+            skipped += 1
+            continue
+        if src.resolve() == dst.resolve():
+            skipped += 1          # 本来就在目标位置，不用动
+            continue
+
+        try:
+            fsutil.assert_writable(dst.parent, permission)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            final = fsutil.ensure_unique(dst) if dst.exists() else dst
+            shutil.move(str(src), str(final))
+            moved += 1
+            moved_size += int(item.get("size") or 0)
+            actions.append({"op": "move", "from": str(src), "to": str(final)})
+        except (OSError, ValueError) as exc:
+            errors.append(f"{src}：{fsutil.human_error(exc)}")
+
+        if index % 10 == 0 or index == total:
+            ctx.progress(f"正在整理 {index}/{total}", index, total, str(src))
+        # 分批落账：中途被杀也留下已搬移的痕迹，便于回滚
+        if len(actions) - flushed >= 20:
+            ctx.add_actions(actions[flushed:])
+            flushed = len(actions)
+        ctx.sleep(0.01)
+
+    ctx.add_actions(actions[flushed:])
+    ctx.phase(6, "整理完成")
+    duration = round(time.perf_counter() - started, 2)
+
+    return {
+        "root": str(root),
+        "group_by": params.get("group_by") or "",
+        "requested_count": total,
+        "moved_count": moved,
+        "skipped_count": skipped,
+        "moved_size": moved_size,
+        "moved_size_text": fsutil.format_size(moved_size),
+        "duration_seconds": duration,
+        "errors": errors[:100],
+        "readonly": False,
+        "note": "已按分组把文件移动到目标子目录；只移动不删除，任务页可整体回滚。",
+        "generated_at": fsutil.now_iso(),
+    }
 
 
 # ---------------------------------------------------------------------------

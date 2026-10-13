@@ -73,6 +73,19 @@ STEP_ORGANIZE: list[dict] = [
      "risk": "low", "input": "{scope} + 整理方式", "output": "按分组的假想结构"},
 ]
 
+# 2026-10-14：整理「真执行」—— 预览本身就是清单来源，加一道 confirm 才动手。
+# 与只读的 STEP_ORGANIZE 分开：那条不带 confirm（预览即交付），这条必须带。
+STEP_ORGANIZE_WRITE: list[dict] = [
+    {"id": "scan", "title": "扫描待整理目录", "kind": "job", "tool": "scan",
+     "risk": "low", "input": "{scope}", "output": "文件数 / 体积 / 类型分布"},
+    {"id": "preview", "title": "生成整理预览", "kind": "job", "tool": "virtual_preview",
+     "risk": "low", "input": "{scope} + 整理方式", "output": "按分组的目标位置"},
+    {"id": "propose", "title": "汇总整理方案", "kind": "report", "tool": "estimate_task",
+     "risk": "low", "input": "预览清单", "output": "将移动的文件数与体积"},
+    {"id": "confirm", "title": "等待你确认", "kind": "confirm", "tool": "",
+     "risk": "low", "input": "方案（逐条列出源 → 目标）", "output": "你的决定"},
+]
+
 # ---- 2026-10-13「能力放开」新增的三条 ----
 
 # 相似图片：分析段换成「找出相似图片」。相似 ≠ 相同，清单必须逐张给人看。
@@ -119,6 +132,7 @@ PIPELINES = {
     "free_space": STEP_FREE_SPACE,
     "migrate": STEP_MIGRATE,
     "organize": STEP_ORGANIZE,
+    "organize_write": STEP_ORGANIZE_WRITE,
     "similar": STEP_SIMILAR,
     "large": STEP_LARGE,
     "purge": STEP_PURGE,
@@ -138,6 +152,8 @@ GOAL_ACTIONS = {
     "junk_clean", "duplicate_clean", "migrate_execute",
     # 2026-10-13 放开：相似图片 / 大文件 / 隔离区彻底删除
     "similar_clean", "large_clean", "trash_purge",
+    # 2026-10-14：整理真执行（就地移动到分组目录）
+    "virtual_organize",
 }
 
 
@@ -179,6 +195,10 @@ def pick_pipeline(intent: dict) -> str:
 
     if action == "virtual_preview":
         return "organize"
+
+    # 2026-10-14：整理真执行走「预览 → 确认 → 移动」那条带 confirm 的流水线
+    if action == "virtual_organize":
+        return "organize_write"
 
     return ""
 
@@ -341,12 +361,18 @@ EXECUTE_STEPS_PURGE: list[dict] = [
 # 相似图片 / 大文件：同走 clean 通道，但步骤标题要说清动的是什么
 EXECUTE_STEPS_SIMILAR: list[dict] = [
     {"id": "execute", "kind": "job", "risk": "medium", "tool": "similar_clean",
-     "title": "分批清理相似图片（先进隔离区）", "input": "已确认的清单", "output": "实际处理结果"},
+     "title": "分批清理相似图片（确认后不可恢复）", "input": "已确认的清单", "output": "实际处理结果"},
 ]
 
 EXECUTE_STEPS_LARGE: list[dict] = [
     {"id": "execute", "kind": "job", "risk": "medium", "tool": "large_clean",
-     "title": "分批清理大文件（先进隔离区）", "input": "已确认的清单", "output": "实际处理结果"},
+     "title": "分批清理大文件（确认后不可恢复）", "input": "已确认的清单", "output": "实际处理结果"},
+]
+
+# 2026-10-14：就地整理 —— 只移动不删除，风险 medium（改结构不改数据），任务页可整体回滚
+EXECUTE_STEPS_ORGANIZE: list[dict] = [
+    {"id": "execute", "kind": "job", "risk": "medium", "tool": "virtual_organize",
+     "title": "移动到分组子目录", "input": "已确认的整理清单", "output": "移动结果（可整体回滚）"},
 ]
 
 _EXECUTE_TEMPLATES = {
@@ -354,6 +380,7 @@ _EXECUTE_TEMPLATES = {
     "trash_purge": EXECUTE_STEPS_PURGE,
     "similar_clean": EXECUTE_STEPS_SIMILAR,
     "large_clean": EXECUTE_STEPS_LARGE,
+    "virtual_organize": EXECUTE_STEPS_ORGANIZE,
 }
 
 # 汇报步骤：每条计划只加一次，放在所有执行步之后
@@ -412,6 +439,7 @@ ACTION_LABELS = {
     "scan": "清理垃圾文件",
     "migrate_execute": "执行跨盘迁移",
     "virtual_preview": "生成整理预览",
+    "virtual_organize": "执行整理",
     # 2026-10-13「能力放开」新增
     "similar_scan": "查找相似图片",
     "similar_clean": "清理相似图片",
@@ -456,6 +484,8 @@ def build_proposal(intent: dict, step_results: dict, mode: str = "analyze") -> d
     # 2026-10-13「能力放开」新增的三个来源
     similar = (step_results.get("similar") or {}).get("result") or {}
     trash = (step_results.get("trash") or {}).get("data") or {}
+    # 2026-10-14：整理真执行的清单来源（预览步 id = preview）
+    preview = (step_results.get("preview") or {}).get("result") or {}
 
     items: list[dict] = []
     freed = 0
@@ -466,17 +496,18 @@ def build_proposal(intent: dict, step_results: dict, mode: str = "analyze") -> d
     goals = [a for a in (intent.get("actions") or []) if a] or [action]
 
     if any(a in ("junk_clean", "junk_scan") for a in goals):
-        # 只清安全级：这是硬约定，谨慎级必须去对应页面手动挑。
-        # include_caution=False 已经在扫描参数里固定，这里再兜一道。
+        # 2026-10-14「清理级别放宽」：安全级 + 建议确认级都进清单；
+        # 谨慎级（可能是个人文件）仍然排除 —— include_caution 保持 False。
+        # 无论哪一级，都要过确认卡逐条列清单，不存在"一句话直接删"。
         picked: list[dict] = []
         for level in junk.get("levels") or []:
-            if level.get("level") != "safe":
+            if level.get("level") not in ("safe", "confirm"):
                 continue
             for item in level.get("items") or []:
                 picked.append({
                     "path": item.get("path"), "is_dir": bool(item.get("is_dir")),
                     "size": item.get("size") or 0, "rule": item.get("rule"),
-                    "level": "safe",
+                    "level": level.get("level") or "safe",
                 })
         items.extend(picked)
         freed += sum(item["size"] for item in picked)
@@ -508,6 +539,19 @@ def build_proposal(intent: dict, step_results: dict, mode: str = "analyze") -> d
         items.extend(moved)
         freed += sum(item.get("size") or 0 for item in moved)
         file_count += len(moved)
+
+    # 2026-10-14：就地整理 —— 清单直接取自预览的 buckets（source → preview_target）。
+    # 这是**移动**不是释放空间，所以不计入 freed；level 记 confirm（动的是你的文件）。
+    if "virtual_organize" in goals:
+        organized = [
+            {"source": item.get("path"), "target": item.get("preview_target"),
+             "size": item.get("size") or 0, "rule": "organize", "level": "confirm"}
+            for bucket in preview.get("buckets") or []
+            for item in bucket.get("items") or []
+        ]
+        items.extend(organized)
+        freed += sum(i.get("size") or 0 for i in organized)   # 这里代表"移动体积"，不是释放
+        file_count += len(organized)
 
     # ---- 2026-10-13「能力放开」新增 ----
     # 相似图片：每组保留 keep（或最新）那一张，其余列为候选。
@@ -579,8 +623,10 @@ def build_proposal(intent: dict, step_results: dict, mode: str = "analyze") -> d
     batches = max(1, (file_count + config.AGENT_BATCH_SIZE - 1) // config.AGENT_BATCH_SIZE) if file_count else 0
 
     missing = []
-    if "junk_clean" in goals and not any(i.get("rule") and i.get("level") == "safe" for i in items):
-        missing.append("没有安全级可清理项")
+    if "junk_clean" in goals and not any(
+        i.get("rule") and i.get("level") in ("safe", "confirm") for i in items
+    ):
+        missing.append("没有可清理项（安全级 / 建议确认级都为空）")
     if "migrate_execute" in goals and not items:
         missing.append("搬移清单为空")
     if any(a in ("similar_clean", "similar_scan") for a in goals) and not items:
@@ -589,21 +635,26 @@ def build_proposal(intent: dict, step_results: dict, mode: str = "analyze") -> d
         missing.append("没有达到体积阈值的大文件")
     if "trash_purge" in goals and not items:
         missing.append("隔离区是空的")
+    if "virtual_organize" in goals and not items:
+        missing.append("没有可整理的文件（预览为空）")
 
     executable = any(a in ("junk_clean", "junk_scan", "duplicate_clean",
                            "duplicate_scan", "migrate_execute",
                            # 2026-10-13「能力放开」新增
                            "similar_clean", "similar_scan", "large_clean", "large_scan",
-                           "trash_purge") for a in goals) and bool(items)
+                           "trash_purge",
+                           # 2026-10-14：整理真执行
+                           "virtual_organize") for a in goals) and bool(items)
 
-    # 迁移不是「释放空间」，是「换个地方放」——措辞跟着动作走，别让用户误会
+    # 迁移 / 整理不是「释放空间」，是「换个地方放」——措辞跟着动作走，别让用户误会
     is_migrate = action == "migrate_execute"
+    is_organize = action == "virtual_organize"
 
     return {
         "action": action or ("junk_clean" if items else ""),
         "label": ACTION_LABELS.get(action or "", "执行方案"),
         "executable": executable,
-        "freed_label": "搬运体积" if is_migrate else "预计释放",
+        "freed_label": "搬运体积" if is_migrate else ("整理体积" if is_organize else "预计释放"),
         "items": items,
         "item_count": file_count,
         "freed_bytes": freed,
