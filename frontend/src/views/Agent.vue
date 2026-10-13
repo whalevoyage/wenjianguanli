@@ -306,7 +306,7 @@ let stopStream = null
 /* 空态的四个入口。给「第一次进来不知道该干什么」一个具体起点，
    note 写的是**点下去会发生什么**，不是宣传语 —— 后面那句"只读"要让用户先看到。 */
 const HERO_ACTIONS = [
-  { label: '清理垃圾', note: '按安全级分档，先进隔离区', prompt: '清理 C 盘垃圾' },
+  { label: '清理垃圾', note: '先列清单确认，确认后即彻底删除', prompt: '清理 C 盘垃圾' },
   { label: '找重复文件', note: '按内容分组，每组只留一份', prompt: '找出 D 盘重复文件并只留最新' },
   { label: '看看磁盘占用', note: '只读扫描，不删任何东西', prompt: '扫描 D 盘' },
   { label: '备份目录', note: '打成 ZIP，跳过依赖与构建产物', prompt: '备份 D:\\资料 到 E:\\备份' },
@@ -442,10 +442,21 @@ async function approvePlanTree() {
   const current = job.job.value
   if (!current?.id) return
   const proposal = current.proposal || {}
+  const action = current.action || proposal.action || ''
+  const isClean = ['junk_clean', 'duplicate_clean', 'similar_clean', 'large_clean'].includes(action)
+  const isPurge = action === 'trash_purge'
+  let body
+  if (isPurge) {
+    body = `即将永久删除隔离区里的 ${proposal.item_count || 0} 项，释放 ${proposal.freed_text || '未知'}。此操作不可恢复。确认继续？`
+  } else if (isClean) {
+    // ★ 确认后隔离即清空：点确认的那一刻文件就彻底没了（先进隔离区再立刻清空），不再有"进隔离区可还原"的窗口
+    body = `即将处理 ${proposal.item_count || 0} 项，预计释放 ${proposal.freed_text || '未知'}。确认后文件将立即彻底删除，不可恢复。确认继续？`
+  } else {
+    body = `即将处理 ${proposal.item_count || 0} 项，预计释放 ${proposal.freed_text || '未知'}。将复制并校验后删除源文件，全程有兜底。确认继续？`
+  }
   try {
     await ElMessageBox.confirm(
-      `即将处理 ${proposal.item_count || 0} 项，预计释放 ${proposal.freed_text || '未知'}。` +
-      '删除一律先进隔离区，随时可还原；执行完也可以整体回滚。确认继续？',
+      body,
       '确认执行方案',
       { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '再看看' },
     )
@@ -535,7 +546,7 @@ function modifyPlan() {
 async function discardPlan() {
   try {
     await ElMessageBox.confirm(
-      '撤销本次计划会停掉这个任务。已经进隔离区的文件仍留在隔离区，可以恢复。',
+      '撤销本次计划会停掉这个任务。计划还没开始动文件，撤销后什么都不影响。',
       '撤销本次计划',
       { type: 'warning', confirmButtonText: '撤销', cancelButtonText: '继续执行' },
     )
@@ -1428,7 +1439,7 @@ async function choosePermission(item) {
   if (item.id === 'full') {
     try {
       await ElMessageBox.confirm(
-        '完全访问允许改动桌面与系统目录。删除仍先进隔离区，任务记录里会留下当时的档位。确认切换？',
+        '完全访问允许改动桌面与系统目录，删除会真实生效（清理类确认后不可恢复），任务记录里会留下当时的档位。确认切换？',
         '切换到「完全访问」',
         { type: 'warning', confirmButtonText: '确认切换', cancelButtonText: '取消' },
       )
@@ -1929,7 +1940,12 @@ onBeforeUnmount(() => {
             @details="showPlanDetails"
           />
           <p v-if="treeWaiting" class="job-card__hint">
-            方案已生成。删除一律先进隔离区，执行完也可以整体回滚——你确认前什么都不会动。
+            <template v-if="['junk_clean','duplicate_clean','similar_clean','large_clean'].includes(lastPlan?.action)">
+              方案已生成。清理类确认后即彻底删除，不可恢复——你确认前什么都不会动。
+            </template>
+            <template v-else>
+              方案已生成。删除一律先进隔离区，可随时还原——你确认前什么都不会动。
+            </template>
           </p>
         </div>
         <div v-else-if="jobRunning" class="job-card">

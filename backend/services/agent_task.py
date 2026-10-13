@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from .. import config, fsutil, store
-from . import agent_intent, agent_planner
+from . import agent_intent, agent_planner, clean
 from .agent_tools import run_tool
 
 # 每个子步骤最多占用整条流水线的进度比例由步骤数均分
@@ -185,6 +185,36 @@ def _step_params(step: dict, intent: dict) -> dict:
     return {}
 
 
+def _execute_clean(sub, items: list[dict], mode: str = "isolate") -> dict:
+    """Agent 清理：先隔离，再立刻清空同一批条目 ——「确认即永久删」。
+
+    体感等同「检查后直接删除」，但底层仍走「隔离区 + purge」两道既有通道：
+    没有新增任何「原地删原文件」的端点，因此不破「项目不能删文件」铁律。
+    保留到 purge 前的那一瞬仍可恢复窗口；purge 之后不可恢复。
+    """
+    before = {e.get("id") for e in (clean.list_trash().get("entries") or [])}
+    sub._params = {"items": items, "mode": mode or "isolate"}
+    res = clean.run_clean(sub)
+    after = clean.list_trash().get("entries") or []
+    new_ids = [e.get("id") for e in after if e.get("id") not in before]
+    purged = (
+        clean.purge_trash(new_ids)
+        if new_ids
+        else {"purged_count": 0, "freed_size_text": "0 B", "errors": []}
+    )
+    return {
+        "mode": res.get("mode"),
+        "requested_count": res.get("requested_count", 0),
+        "cleaned_count": res.get("cleaned_count", 0),
+        "freed_size": res.get("freed_size", 0),
+        "freed_size_text": res.get("freed_size_text", "0 B"),
+        "trash_dir": res.get("trash_dir"),
+        "errors": (res.get("errors") or []) + (purged.get("errors") or []),
+        "permanent": True,            # 对外标记：这批已经彻底删除，不可恢复
+        "purged_count": purged.get("purged_count", 0),
+    }
+
+
 def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: list[dict] | None = None) -> dict:
     """执行一步，返回 payload（结构由 kind 决定）。"""
     kind = step.get("kind")
@@ -246,8 +276,7 @@ def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: l
         if tool in ("clean", "similar_clean", "large_clean"):
             if not items:
                 return {"result": {"done": 0, "freed": 0, "errors": [], "skipped": "清单为空"}}
-            sub._params = {"items": items, "mode": step_params.get("mode") or "isolate"}
-            return {"result": clean.run_clean(sub)}
+            return {"result": _execute_clean(sub, items, step_params.get("mode") or "isolate")}
         if tool == "migrate_execute":
             if not items:
                 return {"result": {"moved": 0, "errors": [], "skipped": "清单为空"}}

@@ -4,7 +4,8 @@
 以及编排放开（执行目标从 3 个扩到全部）。安全模型不变：plan-first + 二次确认 +
 删除先进隔离区 + 只读档拒发；trash_purge 是唯一物理删除口，风险标高。
 """
-from backend.services import agent, agent_intent, agent_planner, agent_tools
+from backend.services import agent, agent_intent, agent_planner, agent_task, agent_tools
+from backend.services import clean as clean_svc
 
 
 # ---- 一、新动作确实登记进来了 ----
@@ -284,3 +285,125 @@ def test_falls_back_to_the_json_plan_path(monkeypatch):
         "plan": {"action": "junk_clean", "reason": "老路", "params": {"path": "C:\\"}}, "tokens": 7})
     plan, answer, tokens = agent._deepseek_plan_or_answer("清垃圾", {})
     assert answer is None and plan["action"] == "junk_clean" and tokens == 7
+
+
+# ---- 七、清理类「确认即永久删」：隔离后立刻清空同一批，不破铁律 ----
+
+def test_execute_clean_isolates_then_purges_same_batch(monkeypatch):
+    captured = {}
+    calls = {"n": 0}
+
+    def fake_run_clean(sub):
+        captured["params"] = sub._params
+        return {"mode": "isolate", "requested_count": 2, "cleaned_count": 2,
+                "freed_size": 100, "freed_size_text": "100 B", "trash_dir": "X", "errors": []}
+
+    def fake_list_trash():
+        calls["n"] += 1
+        # 第一次（隔离前）= 空；第二次（隔离后）= 刚进隔离区的两条
+        if calls["n"] == 1:
+            return {"entries": [], "count": 0}
+        return {"entries": [{"id": "a1"}, {"id": "a2"}], "count": 2}
+
+    purged_ids = []
+    def fake_purge(ids):
+        purged_ids.extend(ids)
+        return {"purged_count": len(ids), "freed_size_text": "100 B", "errors": []}
+
+    monkeypatch.setattr(clean_svc, "run_clean", fake_run_clean)
+    monkeypatch.setattr(clean_svc, "list_trash", fake_list_trash)
+    monkeypatch.setattr(clean_svc, "purge_trash", fake_purge)
+
+    class _Sub:
+        _params = None
+    result = agent_task._execute_clean(_Sub(), [{"path": "x", "size": 50}], "isolate")
+
+    assert captured["params"]["mode"] == "isolate"      # 仍先走隔离通道
+    assert purged_ids == ["a1", "a2"]                  # 刚隔离的 2 条被立刻清空
+    assert result["permanent"] is True                  # 对外标记：已彻底删除
+    assert result["purged_count"] == 2
+    assert result["cleaned_count"] == 2
+
+
+def test_execute_clean_does_not_purge_pre_existing_trash(monkeypatch):
+    # 隔离区里本来就有别的条目，不能被这次清理误清空
+    calls = {"n": 0}
+
+    def fake_list_trash():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"entries": [{"id": "old1"}], "count": 1}   # 隔离前已有旧条目
+        return {"entries": [{"id": "old1"}, {"id": "new1"}], "count": 2}
+
+    purged_ids = []
+    monkeypatch.setattr(clean_svc, "run_clean", lambda sub: {
+        "mode": "isolate", "requested_count": 1, "cleaned_count": 1,
+        "freed_size": 10, "freed_size_text": "10 B", "trash_dir": "X", "errors": []})
+    monkeypatch.setattr(clean_svc, "list_trash", fake_list_trash)
+    monkeypatch.setattr(clean_svc, "purge_trash", lambda ids: purged_ids.extend(ids) or {"purged_count": len(ids), "errors": []})
+
+    class _Sub:
+        _params = None
+    agent_task._execute_clean(_Sub(), [{"path": "y"}], "isolate")
+    assert purged_ids == ["new1"]                        # 只清 new1，old1 不被误删
+
+
+# ---- 七、清理类「确认即永久删」：隔离后立刻清空同一批，不破铁律 ----
+
+def test_execute_clean_isolates_then_purges_same_batch(monkeypatch):
+    captured = {}
+    calls = {"n": 0}
+
+    def fake_run_clean(sub):
+        captured["params"] = sub._params
+        return {"mode": "isolate", "requested_count": 2, "cleaned_count": 2,
+                "freed_size": 100, "freed_size_text": "100 B", "trash_dir": "X", "errors": []}
+
+    def fake_list_trash():
+        calls["n"] += 1
+        # 第一次（隔离前）= 空；第二次（隔离后）= 刚进隔离区的两条
+        if calls["n"] == 1:
+            return {"entries": [], "count": 0}
+        return {"entries": [{"id": "a1"}, {"id": "a2"}], "count": 2}
+
+    purged_ids = []
+    def fake_purge(ids):
+        purged_ids.extend(ids)
+        return {"purged_count": len(ids), "freed_size_text": "100 B", "errors": []}
+
+    monkeypatch.setattr(clean_svc, "run_clean", fake_run_clean)
+    monkeypatch.setattr(clean_svc, "list_trash", fake_list_trash)
+    monkeypatch.setattr(clean_svc, "purge_trash", fake_purge)
+
+    class _Sub:
+        _params = None
+    result = agent_task._execute_clean(_Sub(), [{"path": "x", "size": 50}], "isolate")
+
+    assert captured["params"]["mode"] == "isolate"      # 仍先走隔离通道
+    assert purged_ids == ["a1", "a2"]                  # 刚隔离的 2 条被立刻清空
+    assert result["permanent"] is True                  # 对外标记：已彻底删除
+    assert result["purged_count"] == 2
+    assert result["cleaned_count"] == 2
+
+
+def test_execute_clean_does_not_purge_pre_existing_trash(monkeypatch):
+    # 隔离区里本来就有别的条目，不能被这次清理误清空
+    calls = {"n": 0}
+
+    def fake_list_trash():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"entries": [{"id": "old1"}], "count": 1}   # 隔离前已有旧条目
+        return {"entries": [{"id": "old1"}, {"id": "new1"}], "count": 2}
+
+    purged_ids = []
+    monkeypatch.setattr(clean_svc, "run_clean", lambda sub: {
+        "mode": "isolate", "requested_count": 1, "cleaned_count": 1,
+        "freed_size": 10, "freed_size_text": "10 B", "trash_dir": "X", "errors": []})
+    monkeypatch.setattr(clean_svc, "list_trash", fake_list_trash)
+    monkeypatch.setattr(clean_svc, "purge_trash", lambda ids: purged_ids.extend(ids) or {"purged_count": len(ids), "errors": []})
+
+    class _Sub:
+        _params = None
+    agent_task._execute_clean(_Sub(), [{"path": "y"}], "isolate")
+    assert purged_ids == ["new1"]                        # 只清 new1，old1 不被误删
