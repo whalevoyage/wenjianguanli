@@ -1,0 +1,108 @@
+# Atlas CI —— 每次 push / PR 都跑。
+#
+# 为什么要有这个文件：2026-10-17 的项目体检发现发行包落后源码 19 个提交、
+# 文档里的测试数停在 73 项（实际 105），而所有测试当时都是「手动跑一下」。
+# 没有自动门禁，「测试全绿」和「发出去的包是不是最新」全靠人记。
+#
+# 设计取舍：
+#   · runner 用 windows-latest —— 项目是 Windows 本地工具，路径/DPAPI/junction
+#     这些行为在 Linux 上根本测不出真问题。
+#   · 不装 pywebview —— 它只有打包启动器需要，CI 跑测试不需要原生窗口。
+#   · UI 冒烟（smoke_test.py / *_test.py）不进这里：它们要起服务或浏览器，
+#     重且脆，留给单独的手动流程。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # GitHub 的 Windows runner 自带 Git Bash，统一用它免得 PowerShell 语法混进来
+    shell: bash
+
+jobs:
+  backend:
+    name: Backend · lint / tests / safety
+    runs-on: windows-latest
+
+    env:
+      # 测试只写临时目录，绝不碰仓库里的 .filepilot
+      FILEPILOT_DATA_DIR: ${{ runner.temp }}/atlas-ci-data
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install "fastapi>=0.110" "uvicorn[standard]>=0.29" "pydantic>=2.0"
+          # ruff 钉版本：lint 规则随新版本变化，不钉的话某天突然一片红与代码无关
+          pip install pytest httpx "ruff==0.15.21"
+
+      - name: 准备数据目录
+        run: mkdir -p "$FILEPILOT_DATA_DIR"
+
+      # ---- 第一道：静态检查 ----
+      - name: Ruff
+        run: ruff check backend/ tests/ --output-format concise
+
+      # ---- 第二道：全量单元测试 ----
+      # 不要加 -q：pyproject 的 addopts 已经是 -q，再加一个会变成 -qq，
+      # 汇总行（"317 passed"）会被吞掉，日志里就看不出结论了。
+      - name: Pytest（全量）
+        run: python -m pytest
+
+      # ---- 第三道：安全套件单独亮灯 ----
+      # 全量里已经包含这些用例，这里再单独跑一次是为了让「安全有没有退」
+      # 一眼可见：它红了就是安全边界出问题，而不是某个业务逻辑小改动。
+      - name: Agent Safety
+        run: |
+          python -m pytest \
+            tests/test_agent_safety.py \
+            tests/test_execution_guard.py \
+            tests/test_destructive_semantics.py \
+            tests/test_secrets.py \
+            tests/test_mcp_security.py \
+            tests/test_fs_security.py
+
+  frontend:
+    name: Frontend · build
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装依赖（按 lock 装，保证可复现）
+        working-directory: frontend
+        run: npm ci
+
+      - name: 生产构建
+        working-directory: frontend
+        run: npm run build
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 7

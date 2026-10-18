@@ -528,7 +528,7 @@ def compute_risk(action: str, params: dict, constraints: dict, estimate: dict | 
     """风险等级**本地确定性计算**，不采信模型给的 risk_level。
 
     low    只读；或从隔离区恢复（不会删任何东西）
-    medium 会移动/删除，但先进隔离区、可恢复
+    medium 会移动或删除文件（可恢复与否由具体动作决定，见下方各分支）
     high   涉及盘符根、系统只读区、受保护目录，或批量对象超阈值
     """
     if action not in WRITE_ACTIONS:

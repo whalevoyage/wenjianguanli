@@ -58,19 +58,20 @@ import {
   startProjectScan,
 } from '../api/filepilot'
 import { useConfig } from '../composables/useConfig'
+import { useAgentSettings } from '../composables/useAgentSettings'
 import { useJob } from '../composables/useJob'
 import AgentGlyph from '../components/AgentGlyph.vue'
 import JobProgress from '../components/JobProgress.vue'
 import PlanTree from '../components/PlanTree.vue'
+import AgentTaskPanel from '../components/AgentTaskPanel.vue'
 import NextSteps from '../components/NextSteps.vue'
-import { renderMarkdown } from '../utils/miniMarkdown'
+import { escapeHtml, renderMarkdown } from '../utils/miniMarkdown'
 import { formatShortTime } from '../utils/formatters'
 
 const { config, excludes, load: loadConfig } = useConfig()
 const job = useJob(() => conversationId.value)
 const router = useRouter()
 
-const status = ref(null)
 const messages = ref([])
 const draft = ref('')
 const streaming = ref(false)
@@ -122,28 +123,34 @@ function newConversationId() {
   return `conv-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 }
 
-/* 模型配置：点右下角模型名切模型（内含 API Key），不进「+」菜单 */
-const settings = ref(null)
-const saving = ref(false)
-const form = ref({ key: '', model: '' })
-/* 自定义模型输入默认收起，点「使用自定义模型」再展开（列表更干净） */
-const showCustomModel = ref(false)
-const customModelInput = ref(null)
-const openCustomModel = () => {
-  showCustomModel.value = true
-  nextTick(() => customModelInput.value?.focus?.())
-}
+
+/* 模型配置 + 权限档位的数据与持久化都在 useAgentSettings（Phase 7）。
+   模板里的 settings / status / permissionLabel 等名字保持不变，
+   所以这次抽取**一行模板都不用改**。 */
+const {
+  status,
+  settings,
+  safety,
+  saving,
+  form,
+  showCustomModel,
+  customModelInput,
+  modelLabel,
+  permissionMode,
+  permissionLabel,
+  permissionModes,
+  permissionGuards,
+  permissionTone,
+  loadSettings,
+  loadSafety,
+  reloadStatus,
+  openCustomModel,
+  submitModel,
+  submitKey,
+  clearKey,
+} = useAgentSettings()
 
 /* 权限档位：显示在「+」后面，点开切换 */
-const safety = ref(null)
-
-const permissionMode = computed(() => safety.value?.mode || 'standard')
-const permissionLabel = computed(() => safety.value?.label || '标准')
-const permissionModes = computed(() => safety.value?.modes || [])
-const permissionGuards = computed(() => safety.value?.guards || [])
-const permissionTone = computed(
-  () => permissionModes.value.find(item => item.id === permissionMode.value)?.tone || 'quiet',
-)
 /* 弹层 ref：选完档位要主动收起，否则它一直悬在输入框上方 */
 const permPop = ref(null)
 const closePermPopover = () => permPop.value?.hide?.()
@@ -289,10 +296,8 @@ function useStrategy(item) {
 
 const LONG_TEXT = 320
 /* 后端 /api/settings/agent 不可用时的兜底显示 */
-const DEFAULT_MODEL_NAME = 'deepseek-flash'
 const MODEL_OPTIONS_FALLBACK = ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner']
 
-const modelLabel = computed(() => settings.value?.model || status.value?.model || DEFAULT_MODEL_NAME)
 // 兼容旧版后端：旧进程可能只返回 chat/reasoner，前端仍保留当前发行版模型选项。
 const modelOptions = computed(() => [
   ...new Set([...(settings.value?.model_options || []), ...MODEL_OPTIONS_FALLBACK]),
@@ -437,6 +442,29 @@ async function startPlanTree(msg) {
   loadAgentContext()
 }
 
+/** 永久删除确认里最多列几条路径 —— 再多弹窗就装不下了，其余只报总数 */
+const CONFIRM_PREVIEW_LIMIT = 5
+
+/** 拼「永久删除」确认框的正文：数量 / 体积 / 前几条清单 / 不可恢复。全部转义后拼。 */
+function permanentConfirmBody(items, count, sizeText, intro) {
+  const list = items.slice(0, CONFIRM_PREVIEW_LIMIT)
+    .map(item => `<div class="atlas-confirm__item">${escapeHtml(item.path || item.name || '')}</div>`)
+    .join('')
+  const more = items.length > CONFIRM_PREVIEW_LIMIT
+    ? `<div class="atlas-confirm__item">…等共 ${items.length} 项</div>`
+    : ''
+  const listing = list
+    ? `<div class="atlas-confirm__list">${list}${more}</div>`
+    : ''
+
+  return `<div class="atlas-confirm">`
+    + `<div>${escapeHtml(intro)}</div>`
+    + `<div class="atlas-confirm__meta">共 ${count} 项 · ${escapeHtml(sizeText)}</div>`
+    + listing
+    + `<div class="atlas-confirm__danger">此操作不可恢复，删了就没有了。</div>`
+    + `</div>`
+}
+
 /** 确认方案：在同一个任务里继续执行段（写权限在后端 approve 处再拦一次） */
 async function approvePlanTree() {
   const current = job.job.value
@@ -445,21 +473,39 @@ async function approvePlanTree() {
   const action = current.action || proposal.action || ''
   const isClean = ['junk_clean', 'duplicate_clean', 'similar_clean', 'large_clean'].includes(action)
   const isPurge = action === 'trash_purge'
+  const items = proposal.items || []
+  const count = proposal.item_count || items.length || 0
+  const size = proposal.freed_text || '未知'
+
   let body
-  if (isPurge) {
-    body = `即将永久删除隔离区里的 ${proposal.item_count || 0} 项，释放 ${proposal.freed_text || '未知'}。此操作不可恢复。确认继续？`
-  } else if (isClean) {
-    // ★ 确认后隔离即清空：点确认的那一刻文件就彻底没了（先进隔离区再立刻清空），不再有"进隔离区可还原"的窗口
-    body = `即将处理 ${proposal.item_count || 0} 项，预计释放 ${proposal.freed_text || '未知'}。确认后文件将立即彻底删除，不可恢复。确认继续？`
-  } else {
-    body = `即将处理 ${proposal.item_count || 0} 项，预计释放 ${proposal.freed_text || '未知'}。将复制并校验后删除源文件，全程有兜底。确认继续？`
-  }
-  try {
-    await ElMessageBox.confirm(
-      body,
-      '确认执行方案',
-      { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '再看看' },
+  let title = '确认执行方案'
+  let confirmText = '确认执行'
+
+  if (isPurge || isClean) {
+    // ★ 这两类的执行结果都是**物理删除**（先进隔离区，随即立刻清空同一批）。
+    //   所以按钮必须写「永久删除」，不能只写「确认执行」——用户点的是不可逆的那一下。
+    title = '永久删除（不可恢复）'
+    confirmText = count ? `永久删除 ${count} 项` : '永久删除'
+    body = permanentConfirmBody(
+      items,
+      count,
+      size,
+      isPurge
+        ? '将从隔离区永久删除以下条目：'
+        : '将清理以下文件（先进隔离区，随即立刻清空同一批）：',
     )
+  } else {
+    body = `即将处理 ${count} 项，预计释放 ${size}。将复制并校验后删除源文件，全程有兜底。确认继续？`
+  }
+
+  try {
+    await ElMessageBox.confirm(body, title, {
+      type: 'warning',
+      confirmButtonText: confirmText,
+      cancelButtonText: '取消',
+      // 只有拼好的 HTML 才开；里面每一段都过了 escapeHtml
+      dangerouslyUseHTMLString: Boolean(isPurge || isClean),
+    })
   } catch {
     return
   }
@@ -797,6 +843,24 @@ function formatClock(value) {
     return `${pad(at.getHours())}:${pad(at.getMinutes())}`
   }
   return `${pad(at.getMonth() + 1)}-${pad(at.getDate())}`
+}
+
+/* 侧栏数据：分组与副标题都在父组件算好，AgentTaskPanel 只负责渲染（Phase 7）。
+   这样「任务按什么分组」这条规则始终只有一份，改的时候不用两边找。 */
+const sidebarGroups = computed(() => taskGroups.value.map(group => ({
+  label: group.label,
+  items: group.items.map(item => ({
+    id: item.conversation_id,
+    title: item.title,
+    meta: taskMeta(item),
+    active: item.conversation_id === conversationId.value,
+  })),
+})))
+
+/** 侧栏下拉命令：子组件只回 id，原 item 在这里找回来（重命名要用到旧标题） */
+function onSidebarCommand(command, id) {
+  const item = conversations.value.find(entry => entry.conversation_id === id)
+  if (item) onTaskCommand(command, item)
 }
 
 function taskMeta(item) {
@@ -1399,34 +1463,6 @@ async function loadRecipes() {
   }
 }
 
-/* ------------------------------------------------------------ 模型配置 */
-
-async function loadSettings() {
-  try {
-    settings.value = await getAgentSettings()
-  } catch {
-    settings.value = null
-  }
-}
-
-async function reloadStatus() {
-  try {
-    status.value = await getAgentStatus()
-  } catch {
-    status.value = { configured: false }
-  }
-  await loadSettings()
-  await loadSafety()
-}
-
-async function loadSafety() {
-  try {
-    safety.value = await getSafetySettings()
-  } catch {
-    safety.value = null
-  }
-}
-
 /** 切档位。「完全访问」必须过一道确认，并把 confirm 传给后端（两边都拦）。 */
 async function choosePermission(item) {
   // 点当前档位：给一句提示并收起弹层，别让用户以为「点了没反应」
@@ -1456,52 +1492,6 @@ async function choosePermission(item) {
   } finally {
     // 无论成败都收起弹层：留在原地会挡住输入框，也让人以为没生效
     closePermPopover()
-  }
-}
-
-/** 切模型：点一下就存，不给多余的确认步骤 */
-async function submitModel(model) {
-  const value = (model || '').trim() || DEFAULT_MODEL_NAME
-  if (value === modelLabel.value) return
-  try {
-    settings.value = await saveAgentSettings({ model: value })
-    await reloadStatus()
-    ElMessage.success(`已切换到 ${value}`)
-    // 应用后收起自定义入口，弹层回到干净状态
-    showCustomModel.value = false
-    form.value.model = ''
-  } catch (error) {
-    ElMessage.error(error.message)
-  }
-}
-
-/** 保存 key。留空 = 不改动（避免把掩码当成真 key 回传） */
-async function submitKey() {
-  if (!form.value.key.trim()) {
-    ElMessage.warning('请输入 API Key')
-    return
-  }
-  saving.value = true
-  try {
-    settings.value = await saveAgentSettings({ api_key: form.value.key.trim() })
-    await reloadStatus()
-    form.value.key = ''
-    ElMessage.success('API Key 已保存，立即生效')
-  } catch (error) {
-    ElMessage.error(error.message)
-  } finally {
-    saving.value = false
-  }
-}
-
-/** 清除只动 settings.json：配方与任务记录都不受影响 */
-async function clearKey() {
-  try {
-    settings.value = await saveAgentSettings({ api_key: '' })
-    await reloadStatus()
-    ElMessage.success('已清除 API Key，配方与任务记录不受影响')
-  } catch (error) {
-    ElMessage.error(error.message)
   }
 }
 
@@ -1544,53 +1534,15 @@ onBeforeUnmount(() => {
   <div class="agent-page">
     <div class="agent-workspace">
       <!-- 任务列表：常驻左栏，可收起（窄屏自动收起） -->
-      <aside v-show="!listHidden" class="task-panel">
-        <div class="task-panel__head">
-          <span class="task-panel__title">任务</span>
-          <span v-if="conversations.length" class="task-panel__count">{{ conversations.length }}</span>
-          <span class="task-panel__spacer"></span>
-          <button type="button" class="task-panel__collapse" title="收起列表" @click="toggleList">
-            <el-icon :size="15"><DArrowLeft /></el-icon>
-          </button>
-        </div>
-
-        <button type="button" class="task-new" @click="newConversation">
-          <el-icon :size="14"><Plus /></el-icon>新建任务
-        </button>
-
-        <div class="task-list">
-          <template v-for="group in taskGroups" :key="group.label">
-            <div class="task-group__label">{{ group.label }}</div>
-            <div
-              v-for="item in group.items"
-              :key="item.conversation_id"
-              class="task-item"
-              :class="{ 'is-active': item.conversation_id === conversationId }"
-              @click="switchConversation(item.conversation_id)"
-            >
-              <div class="task-item__body">
-                <span class="task-item__title">{{ item.title }}</span>
-                <span class="task-item__meta">{{ taskMeta(item) }}</span>
-              </div>
-              <el-dropdown trigger="click" placement="bottom-end" @command="command => onTaskCommand(command, item)">
-                <button type="button" class="task-item__more" title="更多" @click.stop>
-                  <el-icon :size="14"><MoreFilled /></el-icon>
-                </button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="rename">重命名</el-dropdown-item>
-                    <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </div>
-          </template>
-          <div v-if="!taskGroups.length" class="task-list__empty">
-            <el-icon :size="22"><ChatLineSquare /></el-icon>
-            <span>还没有任务</span>
-          </div>
-        </div>
-      </aside>
+      <!-- 任务列表：常驻左栏，可收起（窄屏自动收起）—— 已拆到 AgentTaskPanel（Phase 7） -->
+      <AgentTaskPanel
+        :visible="!listHidden"
+        :groups="sidebarGroups"
+        @toggle="toggleList"
+        @create="newConversation"
+        @select="switchConversation"
+        @command="onSidebarCommand"
+      />
 
       <!-- 对话主区 -->
       <section class="agent-shell">
@@ -1940,7 +1892,10 @@ onBeforeUnmount(() => {
             @details="showPlanDetails"
           />
           <p v-if="treeWaiting" class="job-card__hint">
-            <template v-if="['junk_clean','duplicate_clean','similar_clean','large_clean'].includes(lastPlan?.action)">
+            <template v-if="lastPlan?.action === 'trash_purge'">
+              方案已生成。确认后会永久删除隔离区里的这些条目，不可恢复——你确认前什么都不会动。
+            </template>
+            <template v-else-if="['junk_clean','duplicate_clean','similar_clean','large_clean'].includes(lastPlan?.action)">
               方案已生成。清理类确认后即彻底删除，不可恢复——你确认前什么都不会动。
             </template>
             <template v-else>
@@ -2151,6 +2106,10 @@ onBeforeUnmount(() => {
                     <small v-if="settings?.source === 'env'" class="panel__src">环境变量</small>
                     <small v-else-if="settings?.source === 'settings'" class="panel__src">本地设置</small>
                   </div>
+                  <!-- 存量明文 / 开发模式明文：如实说，不假装已加密 -->
+                  <small v-if="settings?.storage_warning" class="panel__warn">
+                    {{ settings.storage_warning }}
+                  </small>
                   <div class="panel__keyrow">
                     <el-input
                       v-model="form.key"
@@ -2225,208 +2184,6 @@ onBeforeUnmount(() => {
   height: 100vh;
 }
 
-/* ------------------------------------------------------- 任务列表（左） */
-/* 面板与主区同为白底（用户要求「和界面一样的白色底」），靠右侧一根细线分栏；
-   列表项再用 1px 描边框成「卡」，当前项描边转主色。
-   竖向栅格统一：标题 / 新建按钮 / 列表项文字 / 项内「…」右边缘，都落在同两条线上。 */
-.task-panel {
-  flex: none;
-  width: 248px;
-  display: flex;
-  flex-direction: column;
-  padding: 12px;
-  background: var(--surface);
-  border-right: 1px solid var(--hairline);
-}
-
-/* 左缩进 = 列表项内边距（10px），让「任务」和列表项文字对齐；缩小后左右都不留大空白 */
-.task-panel__head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 0 10px 10px;
-  border-bottom: 1px solid var(--hairline);   /* 面板头与列表分节 */
-}
-
-.task-panel__title {
-  color: var(--ink);
-  font-size: var(--fs-title);
-  font-weight: 600;
-}
-
-.task-panel__count {
-  color: var(--ink-3);
-  font-size: var(--fs-note);
-}
-
-.task-panel__spacer {
-  flex: 1;
-}
-
-/* 24px 方钮：不描边；右边缘与「新建任务」按钮齐平 */
-.task-panel__collapse {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  color: var(--ink-3);
-  background: transparent;
-  border: 0;
-  border-radius: var(--agent-radius-md);
-  cursor: pointer;
-  transition: color var(--duration-quick) var(--ease), background-color var(--duration-quick) var(--ease);
-}
-
-.task-panel__collapse:hover {
-  color: var(--ink);
-  background: var(--inset);
-}
-
-/* 无底、不描边；左对齐到列表项的同一左栅格（此前居中，是全面板唯一脱栅格的一行） */
-/* 「新建任务」用主色文字（不加边框、不加底色）——
-   面板顶部需要一个彩色锚点，否则整栏从标题到列表清一色灰。
-   加框会把它抬成按钮，与「面板里全是记录」的调子不搭。 */
-.task-new {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
-  width: 100%;
-  height: 34px;
-  margin: 8px 0 4px;
-  padding: 0 10px;                 /* 与列表项文字同一左边缘 */
-  color: var(--primary);
-  background: transparent;         /* 白底（用户要求灰底换白底） */
-  border: 0;
-  border-radius: var(--agent-radius-card);
-  box-shadow: none;
-  font-family: inherit;
-  font-size: var(--fs-note);
-  cursor: pointer;
-  transition: color var(--duration-quick) var(--ease), background-color var(--duration-quick) var(--ease),
-    box-shadow var(--duration-quick) var(--ease);
-}
-
-.task-new:hover {
-  color: var(--primary-ink);
-  background: var(--primary-soft);   /* 悬停给一层主色淡底，与它的颜色呼应 */
-}
-
-.task-list {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  gap: 6px;
-  align-content: start;
-  overflow-y: auto;
-  margin: 0 -2px;
-  padding: 0 2px 8px;
-}
-
-.task-group__label {
-  padding: 8px 0 2px 10px;
-  color: var(--ink-3);
-  font-size: var(--fs-micro);
-  letter-spacing: 0.02em;
-}
-
-/* 第二组起：一条极淡的分节线，把「今天 / 昨天 / 更早」分成明显的段 */
-.task-group__label:not(:first-child) {
-  margin-top: 8px;
-  padding-top: 12px;
-  border-top: 1px solid var(--hairline);
-}
-
-/* 列表项：不描边、不加灰底（用户要求「这个灰底都换成白底」），当前项只用标题加深 + 加粗区分。
-   左内边距保持 10px —— 面板 padding 12px + 10px = 22px，这是全站统一的文字左边缘，
-   改动它会让「新建任务」和列表项标题错开一条线。
-   v25 曾给当前项加过左侧 2px 主色条，**用户当场否掉**，已移除 —— 别再翻烙饼。 */
-.task-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 7px 10px;
-  border-radius: var(--agent-radius-card);
-  cursor: pointer;
-  transition: background-color var(--duration-quick) var(--ease);
-}
-
-.task-item:hover {
-  background: var(--inset);        /* 悬停才出底，静止时是纯白 */
-}
-
-.task-item.is-active {
-  background: var(--primary-soft);
-}
-
-.task-item__body {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-/* 标题用真正的深色（`--ink`），不用 `--ink-2` 的中灰 ——
-   五条中灰标题堆在一起，整栏就是一片灰，这就是「太灰」的主因。
-   当前项因此不能再靠「比别人深」来区分（大家一样深），改靠字重 600 + 淡主色底。 */
-.task-item__title {
-  overflow: hidden;
-  color: var(--ink);
-  font-size: var(--agent-fs-body-tight);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-item.is-active .task-item__title {
-  font-weight: 600;
-}
-
-.task-item__meta {
-  color: var(--ink-3);
-  font-size: var(--fs-micro);
-  font-variant-numeric: tabular-nums;
-}
-
-.task-item__more {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  color: var(--ink-3);
-  background: transparent;
-  border: 0;
-  border-radius: var(--agent-radius-sm);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity var(--duration-quick) var(--ease), color var(--duration-quick) var(--ease),
-    background-color var(--duration-quick) var(--ease);
-}
-
-/* 「…」一律 hover 才出（当前项也不再常显），减少右侧常驻噪音 */
-.task-item:hover .task-item__more {
-  opacity: 1;
-}
-
-.task-item__more:hover {
-  color: var(--ink);
-  background: var(--inset);
-}
-
-.task-list__empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 36px 8px;
-  color: var(--ink-4);
-  font-size: var(--fs-note);
-  text-align: center;
-}
 
 /* ------------------------------------------------------- 对话主区（右） */
 /* 主区白、左栏灰 —— 两栏才分得开（否则面板和主区同色，只剩一根线） */
@@ -3799,6 +3556,19 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-pill);
   font-family: var(--font-sans);
   font-size: var(--agent-fs-xs);
+}
+
+/* 密钥存储形态警告（存量明文 / 开发模式明文）——只提示，不拦保存 */
+.panel--model .panel__warn {
+  display: block;
+  margin: 8px 0 0;
+  padding: 5px 8px;
+  color: var(--warning-ink);
+  background: var(--warning-soft);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--agent-fs-xs);
+  line-height: 1.45;
 }
 
 /* 输入 + 保存 同一行 */

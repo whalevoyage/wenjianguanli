@@ -639,7 +639,10 @@ EXCLUDE_TAGS: dict[str, dict] = {
 # 风险分级：本地确定性计算，不交给模型。见 services/agent_intent.py: compute_risk()
 AGENT_RISK_META: dict[str, dict] = {
     "low": {"label": "低风险", "note": "只读操作，或结果可完全回滚"},
-    "medium": {"label": "中风险", "note": "会移动或删除文件，但先进隔离区、可恢复"},
+    # ★ 不要在这里承诺「可恢复」：清理类（junk/duplicate/similar/large）确认后
+    #   走的是「隔离 + 立刻清空同批」，实际不可恢复。具体语义由 compute_risk()
+    #   按动作给出，这一层只说明「会动文件」。
+    "medium": {"label": "中风险", "note": "会改动或删除文件，请看清清单再确认"},
     "high": {"label": "高风险", "note": "涉及系统盘根目录、系统目录或大批量对象"},
 }
 

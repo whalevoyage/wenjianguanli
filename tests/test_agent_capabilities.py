@@ -183,57 +183,6 @@ def test_execution_steps_emit_one_per_goal_and_a_single_report():
 
 # ---- 六、function calling（说人话就能识别，不必命中固定话术）----
 
-def test_tool_schemas_cover_every_registered_tool():
-    schemas = agent_tools.tool_schemas()
-    names = {s["function"]["name"] for s in schemas}
-    assert set(agent_tools.TOOL_REGISTRY) <= names
-    assert set(agent_tools.QUERY_TOOLS) <= names
-    assert set(agent_tools.HELPER_TOOLS) <= names
-    for item in schemas:
-        assert item["type"] == "function"
-        assert item["function"]["description"]          # 没有说明模型不会用
-    junk = next(s for s in schemas if s["function"]["name"] == "junk_clean")
-    assert "path" in junk["function"]["parameters"]["required"]
-
-
-def test_readonly_tool_calls_answer_directly(monkeypatch):
-    monkeypatch.setattr(agent, "_call_deepseek_tools", lambda m, c: {
-        "tool_calls": [{"name": "trash_contents", "arguments": {"limit": 5}}], "tokens": 42})
-    plan, answer = agent.plan_from_tools("隔离区里现在有啥", {})
-    assert plan is None
-    assert answer["tokens"] == 42 and answer["type"] == "query"
-    assert "trash_contents" in answer["data"]        # 当场跑掉了，不用计划卡
-
-
-def test_write_tool_calls_produce_a_confirmed_plan(monkeypatch, tmp_path):
-    monkeypatch.setattr(agent, "_call_deepseek_tools", lambda m, c: {
-        "tool_calls": [
-            {"name": "junk_scan", "arguments": {"path": str(tmp_path)}},
-            {"name": "junk_clean", "arguments": {"path": str(tmp_path)}},
-        ], "tokens": 88})
-    plan, answer = agent.plan_from_tools("把那儿没用的清一下", {})
-    assert answer is None
-    assert plan["action"] == "junk_clean"
-    assert plan["write"] is True and plan["needs_confirm"] is True
-    # confirm 是**本地**插进去的，模型绕不过
-    assert "confirm" in [s["kind"] for s in agent.steps_for(plan)]
-
-
-def test_invented_tools_are_discarded(monkeypatch):
-    monkeypatch.setattr(agent, "_call_deepseek_tools", lambda m, c: {
-        "tool_calls": [{"name": "rm_rf_everything", "arguments": {}}], "tokens": 5})
-    plan, answer = agent.plan_from_tools("删掉所有文件", {})
-    assert plan is None and answer is None          # 退回老路，不执行
-
-
-def test_falls_back_to_the_json_plan_path(monkeypatch):
-    monkeypatch.setattr(agent, "_call_deepseek_tools", lambda m, c: {"tool_calls": [], "tokens": 0})
-    monkeypatch.setattr(agent, "_call_deepseek", lambda m, c: {
-        "plan": {"action": "junk_clean", "reason": "老路", "params": {"path": "C://"}}, "tokens": 7})
-    plan, answer, tokens = agent._deepseek_plan_or_answer("清垃圾", {})
-    assert answer is None and plan["action"] == "junk_clean" and tokens == 7
-
-
 # ---- 六、function calling（说人话就能识别，不必命中固定话术）----
 
 def test_tool_schemas_cover_every_registered_tool():
@@ -289,65 +238,6 @@ def test_falls_back_to_the_json_plan_path(monkeypatch):
 
 # ---- 七、清理类「确认即永久删」：隔离后立刻清空同一批，不破铁律 ----
 
-def test_execute_clean_isolates_then_purges_same_batch(monkeypatch):
-    captured = {}
-    calls = {"n": 0}
-
-    def fake_run_clean(sub):
-        captured["params"] = sub._params
-        return {"mode": "isolate", "requested_count": 2, "cleaned_count": 2,
-                "freed_size": 100, "freed_size_text": "100 B", "trash_dir": "X", "errors": []}
-
-    def fake_list_trash():
-        calls["n"] += 1
-        # 第一次（隔离前）= 空；第二次（隔离后）= 刚进隔离区的两条
-        if calls["n"] == 1:
-            return {"entries": [], "count": 0}
-        return {"entries": [{"id": "a1"}, {"id": "a2"}], "count": 2}
-
-    purged_ids = []
-    def fake_purge(ids):
-        purged_ids.extend(ids)
-        return {"purged_count": len(ids), "freed_size_text": "100 B", "errors": []}
-
-    monkeypatch.setattr(clean_svc, "run_clean", fake_run_clean)
-    monkeypatch.setattr(clean_svc, "list_trash", fake_list_trash)
-    monkeypatch.setattr(clean_svc, "purge_trash", fake_purge)
-
-    class _Sub:
-        _params = None
-    result = agent_task._execute_clean(_Sub(), [{"path": "x", "size": 50}], "isolate")
-
-    assert captured["params"]["mode"] == "isolate"      # 仍先走隔离通道
-    assert purged_ids == ["a1", "a2"]                  # 刚隔离的 2 条被立刻清空
-    assert result["permanent"] is True                  # 对外标记：已彻底删除
-    assert result["purged_count"] == 2
-    assert result["cleaned_count"] == 2
-
-
-def test_execute_clean_does_not_purge_pre_existing_trash(monkeypatch):
-    # 隔离区里本来就有别的条目，不能被这次清理误清空
-    calls = {"n": 0}
-
-    def fake_list_trash():
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"entries": [{"id": "old1"}], "count": 1}   # 隔离前已有旧条目
-        return {"entries": [{"id": "old1"}, {"id": "new1"}], "count": 2}
-
-    purged_ids = []
-    monkeypatch.setattr(clean_svc, "run_clean", lambda sub: {
-        "mode": "isolate", "requested_count": 1, "cleaned_count": 1,
-        "freed_size": 10, "freed_size_text": "10 B", "trash_dir": "X", "errors": []})
-    monkeypatch.setattr(clean_svc, "list_trash", fake_list_trash)
-    monkeypatch.setattr(clean_svc, "purge_trash", lambda ids: purged_ids.extend(ids) or {"purged_count": len(ids), "errors": []})
-
-    class _Sub:
-        _params = None
-    agent_task._execute_clean(_Sub(), [{"path": "y"}], "isolate")
-    assert purged_ids == ["new1"]                        # 只清 new1，old1 不被误删
-
-
 # ---- 七、清理类「确认即永久删」：隔离后立刻清空同一批，不破铁律 ----
 
 def test_execute_clean_isolates_then_purges_same_batch(monkeypatch):
@@ -411,21 +301,6 @@ def test_execute_clean_does_not_purge_pre_existing_trash(monkeypatch):
 
 # ---- 八、清理级别放宽：安全级 + 建议确认级都进清单，谨慎级仍排除 ----
 
-def test_proposal_includes_confirm_level_junk_but_not_caution():
-    intent = {"action": "junk_clean", "scope": {"path": "D://X"}, "constraints": {}}
-    steps = {"junk": {"result": {"levels": [
-        {"level": "safe", "items": [{"path": "a.tmp", "size": 10, "rule": "temp"}]},
-        {"level": "confirm", "items": [{"path": "b.log", "size": 20, "rule": "log"}]},
-        {"level": "caution", "items": [{"path": "c.dat", "size": 30, "rule": "misc"}]},
-    ]}}}
-    proposal = agent_planner.build_proposal(intent, steps)
-    assert sorted(i["path"] for i in proposal["items"]) == ["a.tmp", "b.log"]
-    assert proposal["freed_bytes"] == 30
-    levels = {i["path"]: i["level"] for i in proposal["items"]}
-    assert levels["b.log"] == "confirm"          # 如实标注等级，别都写成 safe
-    assert proposal["executable"] is True
-
-
 # ---- 八、清理级别放宽：安全级 + 建议确认级都进清单，谨慎级仍排除 ----
 
 def test_proposal_includes_confirm_level_junk_but_not_caution():
@@ -444,46 +319,6 @@ def test_proposal_includes_confirm_level_junk_but_not_caution():
 
 
 # ---- 九、虚拟整理真执行（Agent 侧）----
-
-def test_virtual_organize_is_a_write_action_with_a_confirm_step():
-    assert "virtual_organize" in agent_tools.ALLOWED_ACTIONS
-    assert "virtual_organize" in agent_tools.WRITE_ACTIONS
-    assert agent_planner.pick_pipeline({"action": "virtual_organize"}) == "organize_write"
-    steps = agent_planner.plan_steps({"action": "virtual_organize", "scope": {"path": "D:/X"}})
-    assert "confirm" in [s["kind"] for s in steps]                 # 动手前必须确认
-    assert any(s["tool"] == "virtual_preview" for s in steps)      # 先出预览
-
-
-def test_virtual_organize_proposal_comes_from_preview_buckets():
-    intent = {"action": "virtual_organize", "scope": {"path": "D:/X"}, "constraints": {}}
-    steps = {"preview": {"result": {"buckets": [
-        {"items": [
-            {"path": "D:/X/a.jpg", "preview_target": "D:/X/按类型/图片/a.jpg", "size": 10},
-            {"path": "D:/X/b.mp4", "preview_target": "D:/X/按类型/视频/b.mp4", "size": 20},
-        ]},
-    ]}}}
-    proposal = agent_planner.build_proposal(intent, steps)
-    assert proposal["item_count"] == 2
-    assert proposal["freed_label"] == "整理体积"                    # 不是"预计释放"
-    assert {(i["source"], i["target"]) for i in proposal["items"]} == {
-        ("D:/X/a.jpg", "D:/X/按类型/图片/a.jpg"),
-        ("D:/X/b.mp4", "D:/X/按类型/视频/b.mp4"),
-    }
-    assert proposal["executable"] is True
-
-
-def test_virtual_organize_execution_step_uses_the_organizer():
-    steps = agent_planner.execution_steps(
-        {"action": "virtual_organize"}, {"action": "virtual_organize"})
-    tools = [s["tool"] for s in steps if s["id"] == "execute"]
-    assert tools == ["virtual_organize"]
-
-
-def test_virtual_organize_risk_is_low():
-    level, reason = agent_intent.compute_risk("virtual_organize", {"path": "D:/X"}, {})
-    assert level == "low"
-    assert "回滚" in reason
-
 
 # ---- 九、虚拟整理真执行（Agent 侧）----
 

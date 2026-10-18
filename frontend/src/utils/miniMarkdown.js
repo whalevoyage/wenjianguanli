@@ -16,7 +16,12 @@ const ESCAPES = {
   "'": '&#39;',
 }
 
-function escapeHtml(text) {
+/**
+ * 转义成可以安全拼进 HTML 的文本。
+ * 导出给其他需要 `dangerouslyUseHTMLString` 的地方复用（例如永久删除确认框）：
+ * 文件名合法地可以包含 `<` `&` `"`，不转义就是注入面。
+ */
+export function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, char => ESCAPES[char])
 }
 

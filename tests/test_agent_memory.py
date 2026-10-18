@@ -1,4 +1,3 @@
-from backend import database
 from backend.services import agent
 
 

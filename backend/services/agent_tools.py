@@ -20,173 +20,30 @@ from pathlib import Path
 
 from .. import config, database, fsutil, permissions, store
 
+# ---- 工具定义统一放在 tool_specs.py，这里只做再导出 ----
+# 以前 ALLOWED_ACTIONS / TOOL_REGISTRY / TOOL_GROUPS / WRITE_ACTIONS /
+# ACTION_PARAMS / PATH_PARAMS 六张表各自维护：新增工具漏改一处**不会立刻报错**，
+# 而是静默失效 —— large_scan 就这么丢了 label 和 function-calling schema。
+# 现在工具只在 tool_specs.py 声明一次，其余常量全部派生。
+# ★ 新增工具请改 tool_specs.py，不要在本文件里再手写这些常量。
+from .tool_specs import (
+    ACTION_PARAMS as ACTION_PARAMS,
+    ALLOWED_ACTIONS as ALLOWED_ACTIONS,
+    HELPER_TOOLS as HELPER_TOOLS,
+    PATH_PARAMS as PATH_PARAMS,
+    QUERY_TOOLS as QUERY_TOOLS,
+    TOOL_GROUPS as TOOL_GROUPS,
+    TOOL_REGISTRY as TOOL_REGISTRY,
+    WRITE_ACTIONS as WRITE_ACTIONS,
+)
+
 # ---------------------------------------------------------------------------
-# 一、动作白名单（执行工具 / 导航 / 状态页）
+# 一、共享的垃圾规则匹配器（工具侧预编译一份，与 junk 服务同源）
 # ---------------------------------------------------------------------------
 
 # 垃圾规则 + 预编译正则，与 junk 服务共用 config 里那张表（见 config.junk_matchers）。
 # 跳过集合与 junk 服务略有不同：这里零字节另有单独分支处理。
 _JUNK_MATCHERS = config.junk_matchers(frozenset({"empty_dir", "huge_file", "browser_cache"}))
-
-ALLOWED_ACTIONS = [
-    "open_tab", "overview", "scan", "tree", "virtual_preview", "projects_scan",
-    "duplicate_scan", "junk_scan", "migrate_plan",
-    "jobs_list", "trash_list", "logs_list",
-    "duplicate_clean", "junk_clean", "migrate_execute", "backup",
-    "trash_restore", "job_cancel", "job_rollback",
-    # 2026-10-13「能力放开」新增（★ 必须在 ACTION_PARAMS 里，sanitize_plan 会取它）
-    "similar_scan", "similar_clean", "large_clean", "large_scan",
-    "search_index", "trash_purge",
-    # 2026-10-14：整理真执行
-    "virtual_organize",
-]
-
-# 工具注册表：动作名称、用途、分组和风险集中管理，后续新增能力只需扩展这里。
-TOOL_REGISTRY = {
-    "open_tab": {"label": "打开功能页", "kind": "navigation", "group": "query", "write": False},
-    "overview": {"label": "查看首页概况", "kind": "query", "group": "query", "write": False},
-    "jobs_list": {"label": "查看任务中心", "kind": "query", "group": "query", "write": False},
-    "trash_list": {"label": "查看回收站", "kind": "query", "group": "query", "write": False},
-    "logs_list": {"label": "查看操作日志", "kind": "query", "group": "query", "write": False},
-    "scan": {"label": "扫描目录", "kind": "job", "group": "query", "write": False},
-    "tree": {"label": "生成空间地图", "kind": "job", "group": "query", "write": False},
-    "virtual_preview": {"label": "生成整理预览", "kind": "job", "group": "execute", "write": False},
-    # 2026-10-14：整理真执行（就地移动到分组子目录，只移动不删除、可回滚）
-    "virtual_organize": {"label": "执行整理", "kind": "job", "group": "execute", "write": True},
-    "projects_scan": {"label": "扫描项目雷达", "kind": "job", "group": "query", "write": False},
-    "duplicate_scan": {"label": "查找重复文件", "kind": "job", "group": "query", "write": False},
-    "junk_scan": {"label": "查找垃圾文件", "kind": "job", "group": "query", "write": False},
-    "migrate_plan": {"label": "创建迁移计划", "kind": "job", "group": "execute", "write": False},
-    "duplicate_clean": {"label": "清理重复文件", "kind": "job", "group": "execute", "write": True},
-    "junk_clean": {"label": "清理垃圾文件", "kind": "job", "group": "execute", "write": True},
-    "migrate_execute": {"label": "执行跨盘迁移", "kind": "job", "group": "execute", "write": True},
-    "backup": {"label": "创建项目备份", "kind": "job", "group": "execute", "write": True},
-    "trash_restore": {"label": "恢复隔离区文件", "kind": "job", "group": "execute", "write": True},
-    # job_cancel 不算写：它只是让一个任务停下来，不碰任何文件（只读档也该能停掉跑疯的任务）。
-    # 这里必须与 WRITE_ACTIONS 保持一致 —— 前端按 WRITE_ACTIONS 判定，两处打架会误导后来人。
-    "job_cancel": {"label": "取消任务", "kind": "job", "group": "execute", "write": False},
-    "job_rollback": {"label": "回滚任务", "kind": "job", "group": "execute", "write": True},
-    # ---- 2026-10-13「能力放开」：把页面有、Agent 却没有的能力接上 ----
-    # 相似图片：此前 Agent 完全碰不到（应用里的完整功能）
-    "similar_scan": {"label": "查找相似图片", "kind": "job", "group": "query", "write": False},
-    "similar_clean": {"label": "清理相似图片", "kind": "job", "group": "execute", "write": True},
-    # 大文件：此前能列不能清
-    "large_clean": {"label": "清理大文件", "kind": "job", "group": "execute", "write": True},
-    # 全文检索：此前 Agent 用不了
-    "search_index": {"label": "建立全文索引", "kind": "job", "group": "query", "write": False},
-    # 隔离区彻底删除：**全项目唯一的物理删除口**，最高风险
-    "trash_purge": {"label": "彻底删除隔离区内容", "kind": "job", "group": "execute", "write": True},
-}
-
-# 工具分组：与第七阶段计划树里的「输入 / 输出 / 风险」展示一一对应
-TOOL_GROUPS: dict[str, list[str]] = {
-    "query": [
-        "drive_status", "dir_size", "dir_tree", "type_distribution", "recent_files",
-        "large_files", "duplicate_files", "junk_files", "project_dirs",
-        "job_status", "trash_contents", "operation_logs",
-        "search", "backup_verify", "snapshot_list", "snapshot_compare",
-        "similar_scan", "search_index",
-    ],
-    "execute": [
-        "virtual_preview", "virtual_organize", "migrate_plan", "migrate_execute", "junk_clean",
-        "duplicate_clean", "backup", "trash_restore", "job_cancel", "job_rollback",
-        "similar_clean", "large_clean", "trash_purge",
-    ],
-    "helper": [
-        "check_disk_space", "check_path_exists", "check_path_protected",
-        "check_target_conflict", "check_user_permission", "estimate_task",
-    ],
-}
-
-# 写类动作：会真正动到用户的文件。Agent 侧只负责「出计划」，执行前必须再过一道确认；
-# 前端拿到 write=True 会换警告样式，readonly 档直接拒发。
-#
-# job_cancel 不算写：它只是让一个任务停下来，不碰任何文件。
-# 而且「只读档也想停掉一个跑疯了的任务」是完全合理的诉求，不该被拦住。
-WRITE_ACTIONS = {
-    "duplicate_clean", "junk_clean", "migrate_execute", "backup",
-    "trash_restore", "job_rollback",
-    # 2026-10-13 放开后新增的三个写动作
-    "similar_clean", "large_clean", "trash_purge",
-    # 2026-10-14：就地整理（只移动、不删除、可回滚），但仍是真动文件
-    "virtual_organize",
-}
-
-# 每个动作允许的参数键：模型多吐的字段一律丢弃
-ACTION_PARAMS = {
-    "open_tab": {"route", "path"}, "overview": set(), "jobs_list": set(), "trash_list": set(), "logs_list": set(),
-    "scan": {"path", "min_size_mb", "extensions"},
-    "virtual_preview": {"path", "group_by", "min_size_mb"},
-    "virtual_organize": {"path", "group_by"},
-    "projects_scan": {"path", "zombie_days", "max_depth"},
-    "tree": {"path", "min_size_mb", "extensions"},
-    "duplicate_scan": {"path", "min_size_mb", "extensions"},
-    "junk_scan": {"path"},
-    "migrate_plan": {"source_dir", "target_dir", "min_size_mb", "extensions"},
-    "duplicate_clean": {"path", "keep", "min_size_mb", "extensions"},
-    "junk_clean": {"path"},
-    "migrate_execute": {"source_dir", "target_dir", "min_size_mb", "extensions"},
-    "backup": {"source_dir", "dest_dir"},
-    "trash_restore": {"path"},
-    "job_cancel": set(),
-    "job_rollback": set(),
-    # ---- 2026-10-13「能力放开」新增动作 ----
-    "similar_scan": {"path", "min_size_kb", "threshold", "rotations"},
-    "similar_clean": {"path", "keep", "min_size_mb", "extensions"},
-    "large_clean": {"path", "min_mb", "limit"},
-    "large_scan": {"path", "min_mb", "limit"},
-    "search_index": {"paths"},
-    # 隔离区彻底删除：要么给 ids，要么 all=True（清空整个隔离区）
-    "trash_purge": {"ids", "all"},
-}
-
-# 需要真实存在的目录（目标目录除外——迁移目标允许尚不存在，由 migrate 服务创建）
-PATH_PARAMS = {
-    "open_tab": [], "overview": [], "jobs_list": [], "trash_list": [], "logs_list": [],
-    "scan": ["path"], "tree": ["path"],
-    "virtual_preview": ["path"], "virtual_organize": ["path"], "projects_scan": ["path"],
-    "duplicate_scan": ["path"], "junk_scan": ["path"],
-    "duplicate_clean": ["path"], "junk_clean": ["path"],
-    "migrate_plan": ["source_dir"], "migrate_execute": ["source_dir"],
-    "backup": ["source_dir"],
-    "trash_restore": ["path"],
-    "job_cancel": [], "job_rollback": [],
-    # 2026-10-13 新增（trash_purge 不碰用户目录，只按隔离区 id 删）
-    "similar_scan": ["path"], "similar_clean": ["path"], "large_clean": ["path"],
-    "large_scan": ["path"],
-    "search_index": ["paths"],
-    "trash_purge": [],
-}
-
-# 辅助工具的展示元信息，前端计划树按 id 取标题与说明
-HELPER_TOOLS = {
-    "check_disk_space": {"label": "检查磁盘空间", "params": ["path", "need_mb"]},
-    "check_path_exists": {"label": "检查路径是否存在", "params": ["path"]},
-    "check_path_protected": {"label": "检查路径是否受保护", "params": ["path"]},
-    "check_target_conflict": {"label": "检查目标是否冲突", "params": ["source_dir", "target_dir"]},
-    "check_user_permission": {"label": "检查用户权限", "params": []},
-    "estimate_task": {"label": "估算耗时与释放空间", "params": ["action", "items"]},
-}
-
-QUERY_TOOLS = {
-    "drive_status": {"label": "查询磁盘状态", "params": ["path"]},
-    "dir_size": {"label": "查询目录大小", "params": ["path", "max_depth"]},
-    "dir_tree": {"label": "查询目录树", "params": ["path", "depth"]},
-    "type_distribution": {"label": "查询文件类型分布", "params": ["path"]},
-    "recent_files": {"label": "查询最近修改文件", "params": ["path", "days", "limit"]},
-    "large_files": {"label": "查询大文件", "params": ["path", "min_mb", "limit"]},
-    "duplicate_files": {"label": "查询重复文件", "params": ["path", "min_mb", "limit"]},
-    "junk_files": {"label": "查询垃圾文件", "params": ["path", "limit"]},
-    "project_dirs": {"label": "查询项目目录", "params": ["path", "max_depth"]},
-    "job_status": {"label": "查询任务状态", "params": ["limit"]},
-    "trash_contents": {"label": "查询回收站内容", "params": ["limit"]},
-    "operation_logs": {"label": "查询历史操作记录", "params": ["limit"]},
-    # 2026-10-13「能力放开」补的四个：检索 / 备份核对 / 快照
-    "search": {"label": "全文检索文件内容", "params": ["keyword", "limit"]},
-    "backup_verify": {"label": "核对备份能否还原", "params": ["zip_path", "mode"]},
-    "snapshot_list": {"label": "列出扫描快照", "params": ["root"]},
-    "snapshot_compare": {"label": "对比两个扫描快照", "params": ["root", "base_id", "target_id"]},
-}
 
 # 从目录名反推盘符根，用于「C 盘」这类口语
 DRIVE_ROOT_RE = None  # 由 agent_intent 提供，这里不做正则

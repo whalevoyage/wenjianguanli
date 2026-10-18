@@ -807,8 +807,15 @@ def update_agent_settings(request: AgentSettingsRequest):
     """保存/清除模型配置。api_key 或 model 传空串表示清除该字段。
 
     只写 .filepilot/settings.json —— 配方与任务记录都不受影响。
+
+    ★ 加密失败必须能被用户看到：`secrets.protect()` 在 DPAPI 不可用时抛
+    SecretStorageError(ValueError)，这里翻成 400 + 原文，前端 ElMessage 直接显示
+    「加密失败，未保存」。**绝不能吞掉再回 200** —— 那正是本轮修掉的旧行为。
     """
-    return agent.update_settings(request.api_key, request.model)
+    try:
+        return agent.update_settings(request.api_key, request.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------

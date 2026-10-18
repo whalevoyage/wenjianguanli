@@ -2,15 +2,17 @@
 
 一切"删除"默认先进隔离区，可还原到原位；也可以选择送进系统回收站。
 空文件夹是唯一直接删除的对象（因为它本来就没有内容）。
+
+★ 所有真正动文件的调用都走 `backend.execution`：权限档、目标写保护、
+  链接逃逸在那里统一检查，本模块不再自己拼 `shutil.move` / `unlink`。
 """
 from __future__ import annotations
 
 import os
-import shutil
 import uuid
 from pathlib import Path
 
-from .. import config, fsutil, permissions, store
+from .. import config, execution, fsutil, permissions, store
 from ..jobs import JobContext
 
 MODE_ISOLATE = "isolate"
@@ -80,16 +82,16 @@ def run_clean(ctx: JobContext) -> dict:
                 continue
 
             try:
-                fsutil.assert_writable(path, permission)
-
+                # 门禁集中在 execution 里：readonly 拒、目标写保护拒、源链接逃逸拒。
+                # 这里不再单独 assert_writable —— 重复检查只是多一次 resolve。
                 if item.get("is_dir") and item.get("rule") == "empty_dir":
-                    path.rmdir()
+                    execution.remove_empty_dir(path, mode=permission)
                     actions.append({"op": "rmdir", "to": str(path)})
                     done += 1
 
                 elif mode == MODE_RECYCLE:
                     size = _size_of(path)
-                    if fsutil.send_to_recycle_bin(path):
+                    if execution.recycle(path, mode=permission):
                         actions.append({"op": "recycle", "to": str(path)})
                         done += 1
                         freed += size
@@ -99,9 +101,15 @@ def run_clean(ctx: JobContext) -> dict:
                 else:
                     size = _size_of(path)
                     bucket = _trash_root_for(path) / uuid.uuid4().hex[:8]
-                    bucket.mkdir(parents=True, exist_ok=True)
+                    # 隔离区是工具自己的数据 → into_tool_state，不套自保护门禁
+                    execution.mkdir(bucket, mode=permission, into_tool_state=True)
                     destination = fsutil.ensure_unique(bucket / path.name)
-                    shutil.move(str(path), str(destination))
+                    execution.move(
+                        path, destination,
+                        action="移入隔离区",
+                        mode=permission,
+                        into_tool_state=True,
+                    )
                     record = {
                         "id": uuid.uuid4().hex[:12],
                         "original": str(path),
@@ -145,9 +153,16 @@ def run_clean(ctx: JobContext) -> dict:
 
 
 def restore_trash(ids: list[str]) -> dict:
+    """把隔离区条目还原到原位置。
+
+    ★ 2026-10-17 之前这里只检查了权限档，**没检查还原目标**。于是 standard 档下
+      「从隔离区还原到桌面」是放行的 —— 而桌面是软保护目录（只限写）。
+      现在目标也过 `execution` 的门禁：受保护位置会逐条报错，其余条目照常还原。
+    """
     if not ids:
         raise ValueError("请选择要还原的项目")
     permissions.require_write("还原隔离区里的文件")
+    mode = permissions.current()
     targets = set(ids)
     entries = store.read_trash()
     restored: list[dict] = []
@@ -164,11 +179,16 @@ def restore_trash(ids: list[str]) -> dict:
             if not source.exists():
                 errors.append(f"{entry['name']}：隔离区里已找不到")
                 continue
-            original.parent.mkdir(parents=True, exist_ok=True)
+            execution.mkdir(original.parent, action="还原文件", mode=mode)
             final = fsutil.ensure_unique(original) if original.exists() else original
-            shutil.move(str(source), str(final))
+            execution.move(
+                source, final,
+                action="还原隔离区文件",
+                mode=mode,
+            )
             restored.append({"name": entry["name"], "path": str(final)})
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            # 受保护位置 / 权限不足都按「这一条没还原」处理，不中断其余条目
             errors.append(f"{entry.get('name')}：{fsutil.human_error(exc)}")
             keep.append(entry)
 
@@ -184,6 +204,7 @@ def purge_trash(ids: list[str]) -> dict:
     if not ids:
         raise ValueError("请选择要彻底删除的项目")
     permissions.require_write("永久删除隔离区里的文件（这一步不可恢复）")
+    mode = permissions.current()
     targets = set(ids)
     entries = store.read_trash()
     purged = 0
@@ -197,13 +218,21 @@ def purge_trash(ids: list[str]) -> dict:
             continue
         try:
             path = Path(entry["trash_path"])
-            if path.is_dir():
-                shutil.rmtree(path, ignore_errors=False)
-            elif path.exists():
-                path.unlink()
+            # 隔离区是工具自己的数据 → into_tool_state；权限档门禁依然生效
+            execution.remove(
+                path,
+                recursive=True,
+                action="永久删除隔离区文件（不可恢复）",
+                mode=mode,
+                into_tool_state=True,
+            )
             purged += 1
             freed += int(entry.get("size") or 0)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            # ValueError 也要捕：`execution.remove` 对 junction / 符号链接条目会抛
+            # BlockedPathError（ValueError 子类）。只捕 OSError 的话，**一个坏条目
+            # 就会让整个「彻底删除」中断**，其余条目全删不掉（2026-10-18 实测）。
+            # 正确处理是跳过这一条、记下来，让用户知道哪条没删。
             errors.append(f"{entry.get('name')}：{fsutil.human_error(exc)}")
             keep.append(entry)
 
@@ -218,6 +247,7 @@ def purge_trash(ids: list[str]) -> dict:
 
 
 def _prune_empty_buckets() -> None:
+    mode = permissions.current()
     roots = {config.TRASH_DIR}
     for entry in store.read_trash():
         raw = entry.get("trash_path")
@@ -230,8 +260,9 @@ def _prune_empty_buckets() -> None:
         for child in root.iterdir():
             try:
                 if child.is_dir() and not any(child.iterdir()):
-                    child.rmdir()
-            except OSError:
+                    # 隔离区内部清理空桶：工具自己的数据，不套自保护门禁
+                    execution.remove_empty_dir(child, mode=mode, into_tool_state=True)
+            except (OSError, ValueError):
                 continue
 
 

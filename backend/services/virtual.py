@@ -12,12 +12,11 @@
 from __future__ import annotations
 
 import os
-import shutil
 import time
 from collections import defaultdict
 from pathlib import Path
 
-from .. import config, fsutil, permissions
+from .. import config, execution, fsutil, permissions
 from ..jobs import JobContext
 
 MODE_BY_ID = {mode["id"]: mode for mode in config.VIRTUAL_GROUP_MODES}
@@ -266,6 +265,10 @@ def run_organize(ctx: JobContext) -> dict:
     if not raw_items:
         raise ValueError("没有要整理的清单 —— 先在预览里确认要整理哪些，再执行")
 
+    # ★ 服务层门禁：`virtual` 这个 job 类型同时承担「预览（只读）」和「就地整理（写）」，
+    #   路由层按 job type 判写权限时区分不了，所以门禁必须放在真正动手的这个函数里。
+    permissions.require_write("就地整理（会移动文件）")
+
     permission = permissions.current()
     fsutil.assert_writable(root, permission)
     root_resolved = root.resolve()
@@ -304,10 +307,17 @@ def run_organize(ctx: JobContext) -> dict:
             continue
 
         try:
-            fsutil.assert_writable(dst.parent, permission)
-            dst.parent.mkdir(parents=True, exist_ok=True)
             final = fsutil.ensure_unique(dst) if dst.exists() else dst
-            shutil.move(str(src), str(final))
+            # 目标必须落在整理根内 —— 上面的手写检查给的是友好文案，
+            # 这里再过一道 execution 的统一判定（路径越界 / 写保护 / 权限档）。
+            execution.move(
+                src,
+                final,
+                action="就地整理",
+                mode=permission,
+                dest_root=root_resolved,
+                check_symlink=False,
+            )
             moved += 1
             moved_size += int(item.get("size") or 0)
             actions.append({"op": "move", "from": str(src), "to": str(final)})

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .. import config, fsutil, permissions
+from .. import config, execution, fsutil, permissions
 from ..jobs import JobContext
 
 # 目标盘至少要留这么多余量，防止刚好塞满
@@ -76,6 +76,10 @@ def run_migrate(ctx: JobContext) -> dict:
 
     if not target_raw:
         raise ValueError("请填写目标目录")
+    # ★ 服务层门禁：以前迁移只靠路由层 `_launch()` 拦，Agent / scheduler / 直接调用
+    #   都能绕过 —— 只读档下真的会搬文件。预览（dry_run）不改任何东西，必须放行。
+    if not dry_run:
+        permissions.require_write("跨盘迁移（会复制并在校验后删除源文件）")
     target = fsutil.normalize(target_raw)
     permission = permissions.current()
     fsutil.assert_writable(target, permission)
@@ -215,7 +219,8 @@ def run_migrate(ctx: JobContext) -> dict:
                     # 只比大小就删源违背「校验通过才删」的承诺。
                     if fsutil.verify_copy(src, dst):
                         if mode == "move":
-                            src.unlink()
+                            # 删源同样过 execution：权限档与写保护一条不少
+                            execution.remove(src, action="删除源文件（已校验一致）", mode=permission)
                             pending.append({"op": "move", "from": str(src), "to": str(dst)})
                         continue
                     dst = fsutil.ensure_unique(dst)
@@ -254,12 +259,19 @@ def run_migrate(ctx: JobContext) -> dict:
                 if str(src) not in deletable:
                     continue
                 try:
-                    src.unlink()
+                    # check_symlink=False：源来自不跟随链接的遍历，且根已过
+                    # assert_migration_paths；逐个再爬一遍父链在几千文件上很贵。
+                    execution.remove(
+                        src,
+                        action="删除源文件（已校验一致）",
+                        mode=permission,
+                        check_symlink=False,
+                    )
                     deleted += 1
                     _record_move(src, dst)
                     if len(pending) >= 50:
                         _flush_actions()
-                except OSError as exc:
+                except (OSError, ValueError) as exc:
                     errors.append(f"{src}：{fsutil.human_error(exc)}")
     finally:
         # 无论正常结束、取消还是异常，已发生的动作都要可回滚

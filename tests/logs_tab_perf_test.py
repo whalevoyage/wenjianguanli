@@ -14,7 +14,6 @@
 
 前置：后端 :8000、前端 dev :5173 已启动；用系统 Edge（ms-playwright 的 chromium 已被清理）。
 """
-import sys
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright

@@ -20,6 +20,9 @@ from ..jobs import JobContext
 
 def run_backup(ctx: JobContext) -> dict:
     params = ctx.params
+    # ★ 服务层门禁：备份会真的往磁盘写文件，只读档一律拒绝。
+    #   以前只靠路由层 `_launch()`，绕过它的调用（Agent / 直接函数调用）是裸的。
+    permissions.require_write("创建项目备份")
     # 多来源：`source_dirs`（列表）优先，回退到单个 `source_dir`（兼容旧调用方）。
     roots, notes = fsutil.resolve_sources(
         {"paths": params.get("source_dirs") or [], "source_dir": params.get("source_dir", "")}

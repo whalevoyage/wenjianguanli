@@ -22,7 +22,8 @@ images = ["pillow"]
 packaging = ["pyinstaller"]
 # 部分测试用 pytest（pytest.raises / tmp_path 等），所以这里声明 pytest；
 # 想跑测试：`pip install -e .[test]` 后 `python -m pytest tests/ -q`（仅收 test_*.py）。
-test = ["pytest"]
+# httpx 是 FastAPI TestClient 的依赖 —— 少了它，凡是走 HTTP 路由的测试会直接 import 失败。
+test = ["pytest", "httpx"]
 
 [project.scripts]
 atlas = "packaging.launcher:main"

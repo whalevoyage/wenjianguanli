@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat as stat_module
 import threading
 import time
 from contextlib import contextmanager
@@ -91,13 +92,34 @@ def assert_within(path: Path | str, root: Path | str) -> Path:
     return target
 
 
+def is_reparse_point(path: Path | str) -> bool:
+    """这个路径是不是 Windows 的重解析点（junction / 符号链接 / 挂载点）。
+
+    ★ `Path.is_symlink()` **认不出 junction** —— junction 是 IO_REPARSE_TAG_MOUNT_POINT，
+    不是 symlink tag，`is_symlink()` 对它返回 False。2026-10-17 实测：
+    指向外部的 junction 能一路穿过 `assert_no_symlink` 的旧实现。
+    唯一可靠的判定是 `lstat().st_file_attributes` 里的 REPARSE_POINT 位。
+    """
+    if os.name != "nt":
+        return Path(path).is_symlink()
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return bool(st.st_file_attributes & stat_module.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def assert_no_symlink(path: Path | str) -> Path:
-    """Reject symlinks in every existing component of a path."""
+    """Reject symlinks **and junctions** in every existing component of a path.
+
+    2026-10-17 之前只查 `is_symlink()`，Windows 目录联接（junction）能整条
+    穿过去 —— 「白名单内部 junction 指向外部」这道题当时是零分。
+    """
     candidate = Path(path).expanduser()
     current = candidate
     while True:
-        if current.exists() and current.is_symlink():
-            raise BlockedPathError(f"不允许通过符号链接操作：{current}")
+        if is_reparse_point(current):
+            raise BlockedPathError(f"不允许通过符号链接或目录联接操作：{current}")
         if current.parent == current:
             break
         current = current.parent
@@ -302,6 +324,14 @@ def iter_entries(
     if excludes is not None:
         exclude_set = set(excludes) | set(config.IMPLICIT_EXCLUDES)
 
+    # ★ 根本身就是系统只读区 → 一个条目都不产出。
+    #   子目录的剪枝在下面的循环里，但「根本身」从来没人检查过 ——
+    #   于是 `iter_entries(Path("C:/Windows"))` 会整棵树照进。
+    #   `resolve_sources` 已经会拒绝这类来源，这里是第二道：
+    #   MCP / CLI / 内部查询工具不一定经过 resolve_sources。
+    if is_readonly_zone(root):
+        return
+
     if not count_only and total is None and progress is not None:
         # 注意签名：ProgressFn 是 (message, current, total, path)，第一个是消息
         def _counting(_message: str, done: int, _total: int | None, where: str) -> None:
@@ -401,6 +431,13 @@ def resolve_sources(params: dict) -> tuple[list[Path], list[str]]:
             raise FileNotFoundError(f"路径不存在：{path}")
         if not path.is_dir():
             raise NotADirectoryError(f"不是文件夹：{path}")
+        # ★ 2026-10-18：根**本身**就是系统只读区时要在这里就挡掉。
+        #   遍历层的剪枝只看子目录（`is_readonly_zone(child)`），根本身从来没被检查过——
+        #   于是「把 C:\Windows 当来源」能一路扫出垃圾项（实测 15 项）。
+        #   硬约束是「系统目录永不遍历」，所以这里直接拒绝并说明原因。
+        if is_readonly_zone(path):
+            notes.append(f"{path} 是系统目录，出于安全不会扫描")
+            continue
         parent = next((item for item in kept if _path_contains(item, path)), None)
         if parent is not None:
             if _path_contains(parent, path) and str(parent).rstrip("\\/").lower() == str(path).rstrip("\\/").lower():
@@ -409,6 +446,12 @@ def resolve_sources(params: dict) -> tuple[list[Path], list[str]]:
                 notes.append(f"{path} 已包含在 {parent} 内，已自动跳过")
             continue
         kept.append(path)
+
+    if not kept:
+        raise ValueError(
+            "所选目录都是系统目录（Windows / Program Files / ProgramData 等），"
+            "出于安全不会扫描。请换一个用户目录。"
+        )
     return kept, notes
 
 

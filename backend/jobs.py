@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import queue
-import shutil
 import threading
 import time
 import uuid
@@ -15,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, database, fsutil, permissions, store
+from . import config, database, execution, fsutil, permissions, store
 
 JOB_PENDING = "pending"
 JOB_RUNNING = "running"
@@ -415,8 +414,12 @@ class JobManager:
                     job_id, status=JOB_CANCELLED, message="已取消",
                     finished_at=fsutil.now_iso(), force=True,
                 )
+                # ★ 不要写成 f"...{job.get("x") or "y"}..."：嵌套同引号 f-string 是
+                #   Python 3.12 才允许的语法，而本项目声明支持 3.11 —— 在 3.11 上
+                #   这一行会让 import backend.jobs 直接 SyntaxError（整个后端起不来）。
+                cancel_reason = job.get("cancel_reason") or "未标注"
                 store.write_log(job["type"], "已取消", job.get("target", ""),
-                                note=f"取消来源：{job.get("cancel_reason") or "未标注"}",
+                                note=f"取消来源：{cancel_reason}",
                                 job_id=job_id, permission=job.get("permission"))
             except JobPaused:
                 # 挂起而非结束：同一个 job_id 之后可以再次 start 继续
@@ -454,6 +457,7 @@ class JobManager:
         （2026-10-08 审计实测），「只读档不写任何东西」这条不变量就破了。
         """
         permissions.require_write("回滚任务（会把文件搬回原位）")
+        mode = permissions.current()
         job = self.get(job_id)
         actions = list(job.get("actions") or [])
         restored: list[dict] = []
@@ -466,28 +470,30 @@ class JobManager:
                     src, dst = Path(action["to"]), Path(action["from"])
                     if not src.exists():
                         continue
-                    dst.parent.mkdir(parents=True, exist_ok=True)
                     final = fsutil.ensure_unique(dst) if dst.exists() else dst
-                    shutil.move(str(src), str(final))
+                    execution.move(src, final, action="回滚（搬回原位）", mode=mode)
                     restored.append({"op": "move_back", "path": str(final)})
                 elif op == "copy":
                     target = Path(action["to"])
                     if target.exists():
-                        target.unlink()
+                        execution.remove(target, action="回滚（删除副本）", mode=mode)
                         restored.append({"op": "remove_copy", "path": str(target)})
                 elif op == "trash":
                     trash_path, original = Path(action["to"]), Path(action["from"])
                     if trash_path.exists():
-                        original.parent.mkdir(parents=True, exist_ok=True)
                         final = fsutil.ensure_unique(original) if original.exists() else original
-                        shutil.move(str(trash_path), str(final))
+                        execution.move(
+                            trash_path, final,
+                            action="回滚（从隔离区还原）",
+                            mode=mode,
+                        )
                         restored.append({"op": "restore", "path": str(final)})
                     entries = [e for e in store.read_trash() if e.get("trash_path") != action["to"]]
                     store.save_trash(entries)
                 elif op == "rmdir":
                     target = Path(action["to"])
                     if not target.exists():
-                        target.mkdir(parents=True, exist_ok=True)
+                        execution.mkdir(target, action="回滚（重建空目录）", mode=mode)
                         restored.append({"op": "recreate_dir", "path": str(target)})
                 elif op == "recycle":
                     # 送进系统回收站的文件无法用工具还原，需去系统回收站找回

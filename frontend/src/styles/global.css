@@ -1506,3 +1506,39 @@ input:-webkit-autofill:active {
     flex-direction: column;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Agent「永久删除」确认框
+   ElMessageBox 的内容挂在 body 下，视图里的 scoped 样式够不到，只能放全局。
+   --------------------------------------------------------------------------- */
+.atlas-confirm {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.atlas-confirm__meta {
+  margin: 8px 0 6px;
+  font-weight: 600;
+}
+
+.atlas-confirm__list {
+  max-height: 132px;
+  overflow: auto;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.atlas-confirm__item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.atlas-confirm__danger {
+  color: var(--danger-ink);
+  font-weight: 600;
+}

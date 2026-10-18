@@ -27,6 +27,17 @@ def current() -> str:
     return stored if stored in config.PERMISSION_MODE_IDS else config.DEFAULT_PERMISSION_MODE
 
 
+def readonly_error(action: str = "写操作") -> BlockedPathError:
+    """只读档的统一拒绝异常。文案只在这里定义一次。
+
+    `execution` 层要能复用同一句话：批量循环里档位已经取过，不该再读一遍设置文件，
+    但拒绝时的说法必须和 `require_write()` 一模一样 —— 否则同一个限制会出现两种措辞。
+    """
+    return BlockedPathError(
+        f"当前是「只读」档，不允许{action}。切到「标准」或「完全访问」后再试"
+    )
+
+
 def require_write(action: str = "写操作") -> None:
     """写入口的统一门禁：只读档直接拒，其余档位放行。
 
@@ -39,7 +50,7 @@ def require_write(action: str = "写操作") -> None:
     `except (OSError, ValueError)` 会把它翻成 400 + 原文，不会变成 500。
     """
     if current() == "readonly":
-        raise BlockedPathError(f"当前是「只读」档，不允许{action}。切到「标准」或「完全访问」后再试")
+        raise readonly_error(action)
 
 
 def label(mode: str | None = None) -> str:

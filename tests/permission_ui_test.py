@@ -129,7 +129,7 @@ def run() -> int:
         label = page.locator(".perm-pill").inner_text().strip()
         check("胶囊文案已更新", "只读" in label, repr(label))
         still_open = pop.evaluate("el => getComputedStyle(el).display !== 'none'")
-        check("选完档位弹层自动收起（本轮修复）", still_open is False, f"display 仍为 block" if still_open else "")
+        check("选完档位弹层自动收起（本轮修复）", still_open is False, "display 仍为 block" if still_open else "")
 
         print("\n6) 切档后能再次打开，并可切到「完全访问」")
         pop2 = open_popover(page)

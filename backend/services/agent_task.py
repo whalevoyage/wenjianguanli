@@ -145,6 +145,29 @@ def _step_params(step: dict, intent: dict) -> dict:
             "stale_days": 30,
             "stale_min_size": 0,
         }
+    # ★ 2026-10-17：tree / projects_scan / backup 以前没有参数映射，也没有执行分支。
+    #   它们在 SINGLE_ACTIONS 里（模型能规划成一步），走到 _run_step 的 job 分支
+    #   只会抛「暂不支持」→ 整个任务失败。
+    if tool == "tree":
+        return {
+            "path": scope,
+            "excludes": excludes,
+            "depth": int(params.get("depth") or config.TREE_DEFAULT_DEPTH),
+            "min_size": min_size,
+        }
+    if tool == "projects_scan":
+        return {
+            "paths": [scope] if scope else [],
+            "excludes": excludes,
+            "max_depth": int(params.get("max_depth") or 0),
+            "zombie_days": int(params.get("zombie_days") or 0),
+        }
+    if tool == "backup":
+        return {
+            "source_dir": scope,
+            "dest_dir": target,
+            "excludes": excludes,
+        }
     if tool == "virtual_preview":
         return {
             "path": scope,
@@ -252,10 +275,29 @@ def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: l
         return {}
 
     if kind == "job":
-        from . import clean, duplicates, index, junk, migrate, scan, similar, virtual
+        # ★ 这里必须把 index 模块改名：直接 `from . import index` 会在函数作用域里
+        #   绑定一个叫 index 的局部名，把形参 `index`（步骤序号）**整个遮蔽掉**，
+        #   于是下面 StepContext(..., index, ...) 传进去的是模块对象 →
+        #   `max(0, index)` 抛 TypeError。2026-10-13 引入，直到 2026-10-17 才发现
+        #   （当时没有任何测试覆盖 _run_step，所有多步任务在执行阶段都会崩）。
+        from . import clean, duplicates, junk, migrate, scan, similar, virtual
+        from . import backup as backup_svc
+        from . import index as index_svc
+        from . import projects as projects_svc
 
         step_params = _step_params(step, intent)
         sub = StepContext(parent, step, step_params, index, total)
+
+        # large_scan 是「查大文件」：纯读。它和 large_files 查的是同一件事，
+        # 区别只在归属（large_scan 在动作白名单里，会被规划成一步）。
+        # ★ 2026-10-17 之前它既没有 TOOL_REGISTRY 条目、也没有这条分支，
+        #   规划出来只能落到「暂不支持的任务」。现在补上。
+        if tool == "large_scan":
+            return {"result": run_tool("large_files", {
+                "path": scope,
+                "min_mb": int(constraints.get("min_mb") or 100),
+                "limit": int(constraints.get("limit") or 50),
+            })}
 
         if tool == "duplicate_scan":
             return {"result": duplicates.run_duplicate_scan(sub)}
@@ -265,6 +307,23 @@ def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: l
             return {"result": migrate.run_migrate(sub)}
         if tool == "scan":
             return {"result": scan.run_scan(sub)}
+        if tool == "tree":
+            return {"result": scan.run_tree(sub)}
+        if tool == "projects_scan":
+            return {"result": projects_svc.run_project_scan(sub)}
+        if tool == "backup":
+            return {"result": backup_svc.run_backup(sub)}
+        # 这三个动作需要「具体的目标」才能做，而模型的参数里没有：
+        #   trash_restore 要隔离区条目 id，job_cancel / job_rollback 要任务 id。
+        # 以前它们会掉到末尾抛「暂不支持」→ **整条任务失败**。
+        # 现在给一句明确的人话，任务继续跑完，并告诉用户该去哪个页面。
+        if tool in ("trash_restore", "job_cancel", "job_rollback"):
+            hint = {
+                "trash_restore": "恢复隔离区需要指定条目，请到「回收站」页勾选后恢复",
+                "job_cancel": "取消任务需要任务号，请到「任务中心」操作",
+                "job_rollback": "回滚任务需要任务号，请到「任务中心」操作",
+            }[tool]
+            return {"result": {"skipped": True, "note": hint}}
         if tool == "virtual_preview":
             return {"result": virtual.run_virtual(sub)}
         # 整理真执行：清单（source→target）来自确认过的方案，只移动不删除、可回滚
@@ -281,11 +340,13 @@ def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: l
         if tool == "similar_scan":
             return {"result": similar.run_similar_scan(sub)}
         if tool == "search_index":
-            return {"result": index.run_index(sub)}
+            return {"result": index_svc.run_index(sub)}
 
         # ---- 执行段：复用既有写通道，隔离区 / 分批 / 回滚一个不少 ----
-        # similar_clean / large_clean 与 clean 同一条通道：差别只在清单来源（planner 已分摊）
-        if tool in ("clean", "similar_clean", "large_clean"):
+        # similar_clean / large_clean 与 clean 同一条通道：差别只在清单来源（planner 已分摊）。
+        # junk_clean / duplicate_clean 平时由流水线模板折成 `clean`，但模型直接点名时
+        # 也要能落到同一条通道上，否则会掉到末尾抛「暂不支持」。
+        if tool in ("clean", "junk_clean", "duplicate_clean", "similar_clean", "large_clean"):
             if not items:
                 return {"result": {"done": 0, "freed": 0, "errors": [], "skipped": "清单为空"}}
             return {"result": _execute_clean(sub, items, step_params.get("mode") or "isolate")}

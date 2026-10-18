@@ -1,4 +1,3 @@
-import time
 from backend.jobs import JobManager, JOB_DONE, JOB_FAILED
 
 

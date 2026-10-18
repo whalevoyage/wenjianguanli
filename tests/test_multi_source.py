@@ -7,7 +7,6 @@
 """
 from __future__ import annotations
 
-import os
 import sys
 import threading
 from pathlib import Path
@@ -66,15 +65,19 @@ def test_resolve_sources_path_fallback(tmp_path: Path):
 
 
 def test_resolve_sources_paths_list(tmp_path: Path):
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     roots, notes = fsutil.resolve_sources({"paths": [str(a), str(b)]})
     assert len(roots) == 2
 
 
 def test_resolve_sources_nested_skipped(tmp_path: Path):
-    a = tmp_path / "a"; a.mkdir()
-    sub = a / "sub"; sub.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    sub = a / "sub"
+    sub.mkdir()
     (sub / "x.txt").write_text("hi")
     roots, notes = fsutil.resolve_sources({"paths": [str(a), str(sub)]})
     # sub 被包含在 a 内，应该被跳过，只保留 a
@@ -99,8 +102,10 @@ def test_resolve_sources_empty_fails():
 # ---------------------------------------------------------------------------
 
 def test_iter_entries_multi_roots(tmp_path: Path):
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     (a / "f1.txt").write_text("1")
     (b / "f2.txt").write_text("2")
     seen = {}
@@ -116,20 +121,23 @@ def test_iter_entries_multi_roots(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def test_junk_multi(tmp_path: Path):
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     (a / "empty.log").write_bytes(b"")          # zero_byte
     (b / "empty.tmp").write_bytes(b"")          # zero_byte
     res = junk.run_junk_scan(_ctx({"paths": [str(a), str(b)]}))
     assert res["source_count"] == 2
     assert {str(a), str(b)} <= set(res["sources"])
-    total = sum(item["size"] for lv in res["levels"] for item in lv["items"])
     assert res["total_count"] >= 2
 
 
 def test_scan_multi(tmp_path: Path):
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     (a / "big.iso").write_bytes(b"x" * (20 * 1024 * 1024))
     (b / "note.txt").write_text("hello")
     res = scan.run_scan(_ctx({"paths": [str(a), str(b)]}))
@@ -139,8 +147,10 @@ def test_scan_multi(tmp_path: Path):
 
 
 def test_duplicate_cross_source(tmp_path: Path):
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     content = "identical payload for cross-source test\n"
     (a / "dup.txt").write_text(content)
     (b / "dup.txt").write_text(content)
@@ -157,8 +167,10 @@ def test_duplicate_cross_source(tmp_path: Path):
 
 
 def test_similar_multi_handles_pillow_absence(tmp_path: Path):
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     # 即使没装 Pillow，多源解析本身也不能崩；available=False 时直接返回人话
     res = similar.run_similar_scan(_ctx({"paths": [str(a), str(b)]}))
     assert res["available"] in (True, False)
@@ -191,8 +203,10 @@ def _stub_launch():
 def test_endpoint_scan_paths_only(tmp_path: Path):
     captured = _stub_launch()
     from backend import main
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     resp = main.start_scan(main.ScanRequest(paths=[str(a), str(b)]))
     # 多源：标题带「个来源」后缀，目标取首个来源
     assert "个来源" in resp["title"]
@@ -204,7 +218,8 @@ def test_endpoint_scan_paths_only(tmp_path: Path):
 def test_endpoint_scan_single_path_backcompat(tmp_path: Path):
     captured = _stub_launch()
     from backend import main
-    a = tmp_path / "a"; a.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
     # 老旧调用方仍只发 path：resolve_sources 回退到 path，不应带「个来源」
     main.start_scan(main.ScanRequest(path=str(a)))
     assert "个来源" not in captured["title"]
@@ -227,8 +242,10 @@ def test_endpoint_scan_bad_path_400(tmp_path: Path):
 def test_endpoint_other_three_paths_only(tmp_path: Path):
     captured = _stub_launch()
     from backend import main
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     for fn, req in (
         (main.start_duplicate_scan, main.DuplicateRequest),
         (main.start_junk_scan, main.JunkRequest),
@@ -246,8 +263,10 @@ def test_endpoint_other_three_paths_only(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def test_projects_multi(tmp_path: Path):
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     for name, base in (("A", a), ("B", b)):
         proj = base / f"proj_{name}"
         proj.mkdir()
@@ -262,8 +281,10 @@ def test_projects_multi(tmp_path: Path):
 
 
 def test_index_multi(tmp_path: Path):
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     (a / "note.txt").write_text("hello index", encoding="utf-8")
     (b / "doc.md").write_text("# title", encoding="utf-8")
     res = index.run_index(_ctx({"paths": [str(a), str(b)]}))
@@ -276,8 +297,10 @@ def test_index_multi(tmp_path: Path):
 def test_endpoint_projects_and_search_paths_only(tmp_path: Path):
     captured = _stub_launch()
     from backend import main
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     for fn, req in (
         (main.start_project_scan, main.ProjectRequest),
         (main.start_search_index, main.SearchIndexRequest),
@@ -294,8 +317,10 @@ def test_endpoint_projects_and_search_paths_only(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def _two_sources(tmp_path: Path):
-    a = tmp_path / "A"; a.mkdir()
-    b = tmp_path / "B"; b.mkdir()
+    a = tmp_path / "A"
+    a.mkdir()
+    b = tmp_path / "B"
+    b.mkdir()
     (a / "same.txt").write_text("from A", encoding="utf-8")
     (b / "same.txt").write_text("from B", encoding="utf-8")
     (a / "sub").mkdir()
@@ -307,7 +332,8 @@ def test_migrate_multi_plan_splits_by_source(tmp_path: Path):
     from backend.services import migrate
     from backend.services.headless import HeadlessContext
     a, b = _two_sources(tmp_path)
-    tgt = tmp_path / "target"; tgt.mkdir()
+    tgt = tmp_path / "target"
+    tgt.mkdir()
     res = migrate.run_migrate(HeadlessContext({
         "source_dirs": [str(a), str(b)], "target_dir": str(tgt), "dry_run": True, "mode": "move"}))
     assert res["source_count"] == 2
@@ -322,7 +348,8 @@ def test_migrate_single_source_unchanged(tmp_path: Path):
     from backend.services import migrate
     from backend.services.headless import HeadlessContext
     a, _b = _two_sources(tmp_path)
-    tgt = tmp_path / "target"; tgt.mkdir()
+    tgt = tmp_path / "target"
+    tgt.mkdir()
     res = migrate.run_migrate(HeadlessContext({"source_dir": str(a), "target_dir": str(tgt), "dry_run": True}))
     # 单源不前缀：target/same.txt（旧行为）
     assert str(tgt / "same.txt") in {item["target"] for item in res["plan"]}
@@ -344,8 +371,10 @@ def test_backup_multi_puts_each_source_in_zip(tmp_path: Path):
 def test_endpoint_migrate_backup_source_dirs(tmp_path: Path):
     captured = _stub_launch()
     from backend import main
-    a = tmp_path / "a"; a.mkdir()
-    b = tmp_path / "b"; b.mkdir()
+    a = tmp_path / "a"
+    a.mkdir()
+    b = tmp_path / "b"
+    b.mkdir()
     for fn, req, extra in (
         (main.start_migrate, main.MigrateRequest, {"target_dir": str(tmp_path / "t")}),
         (main.start_backup, main.BackupRequest, {}),

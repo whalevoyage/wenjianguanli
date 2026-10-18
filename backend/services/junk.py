@@ -49,8 +49,9 @@ def _is_cache(path: Path) -> bool:
 def run_junk_scan(ctx: JobContext) -> dict:
     params = ctx.params
     roots, source_notes = fsutil.resolve_sources(params)
-    # 多个来源自身不算"空目录"，遍历时要逐个跳过
-    root_texts = {str(item).rstrip("\\/").lower() for item in roots}
+    # 注：多来源时「根目录自身」不会被当成空目录 —— 空目录判定靠 on_dir 回调，
+    # 它只在**进入子目录**时触发，根不在其中。以前这里还留着一个算好却没用的
+    # `root_texts` 集合，2026-10-18 清 lint 时删掉了。
     excludes = params.get("excludes")
     enabled_rules = set(params.get("rules") or [rule["id"] for rule in config.JUNK_RULES])
     include_caution = bool(params.get("include_caution", False))

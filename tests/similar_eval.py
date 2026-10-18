@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import io
-import os
 import tempfile
 from pathlib import Path
 
@@ -172,16 +171,27 @@ def main():
     for bi, base in enumerate(photos):
         grp = []
         p = tmp / f"b{bi}_orig.png"
-        _save(base, p); grp.append(str(p))
-        p = tmp / f"b{bi}_j90.jpg"; _save_jpeg(base, p, 90); grp.append(str(p))
-        p = tmp / f"b{bi}_j50.jpg"; _save_jpeg(base, p, 50); grp.append(str(p))
+        _save(base, p)
+        grp.append(str(p))
+        p = tmp / f"b{bi}_j90.jpg"
+        _save_jpeg(base, p, 90)
+        grp.append(str(p))
+        p = tmp / f"b{bi}_j50.jpg"
+        _save_jpeg(base, p, 50)
+        grp.append(str(p))
         small = base.resize((int(base.width * 0.6), int(base.height * 0.6)))
-        p = tmp / f"b{bi}_r06.png"; _save(small, p); grp.append(str(p))
+        p = tmp / f"b{bi}_r06.png"
+        _save(small, p)
+        grp.append(str(p))
         big = base.resize((int(base.width * 1.8), int(base.height * 1.8)))
-        p = tmp / f"b{bi}_r18.png"; _save(big, p); grp.append(str(p))
+        p = tmp / f"b{bi}_r18.png"
+        _save(big, p)
+        grp.append(str(p))
         w, h = base.size
         crop = base.crop((int(w * 0.1), int(h * 0.1), int(w * 0.9), int(h * 0.9)))
-        p = tmp / f"b{bi}_crop.png"; _save(crop, p); grp.append(str(p))
+        p = tmp / f"b{bi}_crop.png"
+        _save(crop, p)
+        grp.append(str(p))
         variant_paths.append(grp)
 
         rot = []
@@ -196,10 +206,12 @@ def main():
     meta: list[tuple[int, str]] = []  # (base_index, kind)
     for bi, grp in enumerate(variant_paths):
         for kind, path in enumerate(grp):
-            flat.append(path); meta.append((bi, f"v{kind}"))
+            flat.append(path)
+            meta.append((bi, f"v{kind}"))
     for bi, rot in enumerate(rotation_paths):
         for ang_i, path in enumerate(rot):
-            flat.append(path); meta.append((bi, f"rot{90 * (ang_i + 1)}"))
+            flat.append(path)
+            meta.append((bi, f"rot{90 * (ang_i + 1)}"))
 
     hashes = [_hash_of(p) for p in flat]
 
@@ -320,7 +332,7 @@ def main():
     print()
 
     print("== 结论速览 ==")
-    print(f"  - 压缩/缩放/裁切：dHash 基本能抓（见上方匹配率）")
+    print("  - 压缩/缩放/裁切：dHash 基本能抓（见上方匹配率）")
     print(f"  - 旋转：dHash 完全不认（{sum(1 for d in rot_dists if d <= THRESHOLD)}/{len(rot_dists)} 误判，实为缺口）")
     print(f"  - 精度：跨图负样本 precision={precision:.3f}")
     print(f"  - 旧分桶召回漏洞：漏掉 {len(missed)}/{len(pos_brute)} 个本应相似的对（已用多索引哈希修复）")
