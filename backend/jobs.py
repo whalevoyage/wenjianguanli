@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, database, execution, fsutil, permissions, store
+from . import config, database, execution, fsutil, journal, permissions, store
 
 JOB_PENDING = "pending"
 JOB_RUNNING = "running"
@@ -406,6 +406,13 @@ class JobManager:
                     job_id=job_id, job_type=job["type"], permission=job.get("permission"),
                     reclaimed=reclaimed_bytes(job["type"], result),
                 )
+                # 操作流水（Phase 8）：只记成功终态 —— 失败/取消没有可撤销的动作。
+                # 记在 finally 之外、write_log 之后：日志失败不该连累任务状态，
+                # 但流水失败同样不该，所以单独 try。
+                try:
+                    journal.record(job, result)
+                except Exception:  # noqa: BLE001
+                    pass
             except (JobCancelled, InterruptedError):
                 # InterruptedError 是 fsutil 里统一的"已取消"信号（见 hash_file / copy_file），
                 # 不并进来的话，取消一个大文件查重会被当成普通异常 →
@@ -510,6 +517,11 @@ class JobManager:
 
         store.write_log(job["type"], "已回滚" if not errors else "回滚部分失败", job.get("target", ""),
                         f"恢复 {len(restored)} 项", job_id=job_id)
+        # 流水里对应的那条也要标记，否则用户回到列表又能点一次撤销
+        try:
+            journal.mark_all_undone_for_job(job_id)
+        except Exception:  # noqa: BLE001
+            pass
         return {"job_id": job_id, "restored_count": len(restored), "restored": restored, "errors": errors}
 
 

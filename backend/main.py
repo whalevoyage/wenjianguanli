@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, diagnostics, fsutil, permissions, scheduler, store
+from . import config, diagnostics, fsutil, journal, permissions, scheduler, store
 from .jobs import JOB_TYPES, JobContext, manager
 from .services import (
     agent, agent_task, backup, clean, duplicates, explain, index, junk, migrate, overview, projects,
@@ -688,6 +688,30 @@ def explain_item(request: ExplainRequest):
 def get_logs():
     logs = store.read_logs()
     return {"logs": logs, "count": len(logs), "source": config.LOG_FILE.name}
+
+
+# ---------------------------------------------------------------------------
+# 操作流水（Phase 8）
+#
+# 与 /api/logs 的区别：日志是「跑过什么」的流水账，这里是「能撤销什么」的清单。
+# 一条 = 一次操作批次，撤销时复用 job 的 actions，不回退任何既有权能。
+# ---------------------------------------------------------------------------
+
+@app.get("/api/journal")
+def get_journal(limit: int = 100, source: str | None = None, undoable: bool | None = None):
+    return {
+        "entries": journal.entries(limit, source=source, undoable=undoable),
+        "stats": journal.stats(),
+    }
+
+
+@app.post("/api/journal/{entry_id}/undo")
+def undo_journal_entry(entry_id: str):
+    """撤销一次操作。只读档会被 manager.rollback 里的门禁拦下（400 + 原文）。"""
+    try:
+        return journal.undo(entry_id)
+    except (ValueError, OSError) as exc:
+        raise _friendly(exc)
 
 
 @app.post("/api/logs/export")

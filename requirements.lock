@@ -1,0 +1,49 @@
+# 依赖锁 —— 用于「可复现安装」
+#
+# 为什么需要它：`requirements.txt` 用的是 `>=` 宽松约束，同一份代码在不同时间、
+# 不同机器上装出来的版本可能不一样。2026-10-17 的项目体检就吃过这类亏：
+# 发行包落后源码 19 个提交，而文档里的测试数停在 73 项（实际 106）——
+# 没有一个可复现的基线，「我这儿能跑」就没有说服力。
+#
+# 用法：
+#   pip install -r requirements.lock     # 精确复现
+#   pip install -r requirements.txt      # 只看要求，交给 pip 自己解析
+#
+# ★ 不要用 `pip freeze` 生成这个文件：开发机上有 145 个包（aider、aiohttp…），
+#   freeze 会把与本项目无关的全部写进来。这里只列项目真正的依赖树。
+#
+# 基线环境：Windows 11 / CPython 3.12 / 2026-10-18
+
+# ---------------------------------------------------------------- 运行必需
+fastapi==0.128.8
+uvicorn==0.49.0
+pydantic==2.12.5
+
+# ---------------------------------------------------------- 运行时传递依赖
+starlette==0.52.1
+anyio==4.12.1
+click==8.3.1
+h11==0.16.0
+idna==3.11
+sniffio==1.3.1
+annotated-types==0.7.0
+typing-extensions==4.15.0
+websockets==16.0          # uvicorn[standard]
+watchfiles==1.1.1         # uvicorn[standard]：--reload
+httptools==0.8.0          # uvicorn[standard]
+PyYAML==6.0.3             # uvicorn[standard]
+python-dotenv==1.2.1      # uvicorn[standard]
+
+# -------------------------------------------------- 测试与静态检查（CI 用）
+# CI 直接装这个文件，所以 ruff 的版本也钉在这里 ——
+# lint 规则会随版本变化，不钉的话某天一片红跟代码无关。
+pytest==9.1.1
+httpx==0.28.1             # FastAPI TestClient 依赖它
+httpcore==1.0.9
+certifi==2026.1.4         # httpx 的 CA 包
+ruff==0.15.21
+
+# ---------------------------------------------------------------- 可选功能
+pillow==12.1.1            # 相似图片查重；缺了会明确提示缺 Pillow，不会崩
+# pywebview               # 桌面窗口：只在打包发行版时需要，开发环境不装也能跑
+#                         # （packaging/launcher.py 检测不到会自动退回浏览器）

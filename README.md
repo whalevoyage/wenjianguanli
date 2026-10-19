@@ -333,11 +333,16 @@ powershell -ExecutionPolicy Bypass -File .\packaging\build_release.ps1
 
 ## 数据与隐私
 
-Atlas 以本地运行为主。除用户主动启用 DeepSeek 请求外，文件内容、扫描结果和任务状态不会主动上传到远程服务。使用云端模型时，用户输入会发送给所配置的服务商；文件操作仍由本机执行。请勿在对话中输入密码、密钥或其他敏感信息。
+除 Agent 助手页和「?」解释这两个**主动触发**的联网点外，文件内容、扫描结果和任务状态都不会离开本机。
+
+有一处值得单独说：**让 Agent 搜索文件内容时**，命中的正文片段会进入模型上下文——
+这是全文检索这个动作本身决定的。扫描 / 查重 / 清理 / 迁移只读文件名、大小和哈希，不读正文。
+
+完整说明（数据存在哪、发出去什么、如何彻底删除）见 [`PRIVACY.md`](PRIVACY.md)。
 
 ## 许可证
 
 本项目采用 [MIT License](LICENSE) 开源。你可以自由使用、修改和分发，只需保留版权与许可声明。
 
-> MCP server 的安全边界（白名单、只读工具、两处不受白名单约束的出口）见 [`docs/MCP_SECURITY.md`](docs/MCP_SECURITY.md)。
+> 安全边界与漏洞报告方式见 [`SECURITY.md`](SECURITY.md) 与 [`docs/MCP_SECURITY.md`](docs/MCP_SECURITY.md)。
 > 当前已知限制见 [`docs/LIMITS.md`](docs/LIMITS.md)。

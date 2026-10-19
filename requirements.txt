@@ -1,3 +1,7 @@
+# 运行时依赖（宽松约束，交给 pip 解析）。
+# 要可复现的精确版本，用 `pip install -r requirements.lock`；
+# 那份锁文件也是 CI 实际安装的依据。
+
 fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2.0

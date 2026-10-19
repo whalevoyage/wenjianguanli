@@ -46,12 +46,13 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: 安装依赖
+      - name: 安装依赖（走依赖锁）
         run: |
           python -m pip install --upgrade pip
-          pip install "fastapi>=0.110" "uvicorn[standard]>=0.29" "pydantic>=2.0"
-          # ruff 钉版本：lint 规则随新版本变化，不钉的话某天突然一片红与代码无关
-          pip install pytest httpx "ruff==0.15.21"
+          # 用 requirements.lock 而不是 requirements.txt：后者是 >= 宽松约束，
+          # 同一天不同机器可能装出不同版本，CI 也就失去意义了。
+          # 锁文件里已经包含 pytest / httpx / ruff，不需要另装。
+          pip install -r requirements.lock
 
       - name: 准备数据目录
         run: mkdir -p "$FILEPILOT_DATA_DIR"
