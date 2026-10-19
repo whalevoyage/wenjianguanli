@@ -61,6 +61,11 @@ export function cancelJob(jobId, reason = '') {
 }
 export const rollbackJob = jobId => unwrap(api.post(`/jobs/${jobId}/rollback`))
 
+/* ---- 操作流水（Phase 8/13）：能撤销什么 ----
+   与 listLogs 的分工：日志是"跑过什么"的流水账，这里是"能撤销什么"的清单。 */
+export const getJournal = (params = {}) => unwrap(api.get('/journal', { params }))
+export const undoJournalEntry = entryId => unwrap(api.post(`/journal/${entryId}/undo`))
+
 export function subscribeJob(jobId, onUpdate) {
   const base = api.defaults.baseURL
   const source = new EventSource(`${base}/jobs/${jobId}/stream`)

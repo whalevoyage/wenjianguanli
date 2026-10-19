@@ -1,9 +1,16 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Operation, Promotion, Refresh } from '@element-plus/icons-vue'
 import EmptyState from '../components/EmptyState.vue'
-import { approveAgentTask, cancelJob, listJobs, rollbackJob } from '../api/filepilot'
+import {
+  approveAgentTask,
+  cancelJob,
+  getJournal,
+  listJobs,
+  rollbackJob,
+  undoJournalEntry,
+} from '../api/filepilot'
 import JobProgress from '../components/JobProgress.vue'
 import { formatDateTime, formatShortTime } from '../utils/formatters'
 
@@ -45,12 +52,74 @@ async function resumeAgentTask(job) {
   }
 }
 
+/* ---- 最近操作（Phase 8 的后端能力，Phase 13 接到界面）----
+   这里回答的是「我刚才那一下还能不能撤回」，跟下面的任务列表不一样：
+   任务是「跑过什么」，这里是「能撤销什么」。 */
+const journal = ref([])
+const undoing = ref('')
+
+const undoableCount = computed(() => journal.value.filter(item => item.undoable && !item.undone).length)
+
+async function loadJournal() {
+  try {
+    const data = await getJournal({ limit: 8 })
+    journal.value = data.entries || []
+  } catch {
+    // 流水读不到不该影响任务列表 —— 它只是附加信息
+    journal.value = []
+  }
+}
+
+function sourceLabel(source) {
+  return { user: '你', agent: 'Agent', scheduler: '定时' }[source] || source
+}
+
+/** 为什么这条不能撤 —— 必须说清原因，否则"不可撤销"看起来像 bug。 */
+function whyLocked(entry) {
+  if (entry.type === 'backup') return '备份只产出一份压缩包，没有改动原文件'
+  if (entry.type === 'scan' || entry.type === 'index') return '只读操作，没有改动文件'
+  if (entry.source === 'agent') return 'Agent 的清理确认后已彻底删除，无法恢复'
+  return '这次操作没有可回滚的文件动作'
+}
+
+async function undoEntry(entry) {
+  const count = entry.action_count || 0
+  try {
+    await ElMessageBox.confirm(
+      `将撤销这次「${entry.title || entry.type}」：把 ${count} 个文件动作反向执行`
+      + '（删除的搬回、移动的搬回原位）。已彻底删除的文件不在此列。继续？',
+      '撤销这次操作',
+      { type: 'warning', confirmButtonText: '撤销', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+
+  undoing.value = entry.id
+  try {
+    const result = await undoJournalEntry(entry.id)
+    const restored = result.restored_count ?? 0
+    const errors = result.errors || []
+    if (errors.length) {
+      ElMessage.warning(`已撤销 ${restored} 项，${errors.length} 项失败：${errors[0]}`)
+    } else {
+      ElMessage.success(`已撤销，恢复 ${restored} 项`)
+    }
+    await Promise.all([loadJournal(), load()])
+  } catch (error) {
+    ElMessage.error(error.message)
+  } finally {
+    undoing.value = ''
+  }
+}
+
 async function load(showMessage = false) {
   loading.value = true
   try {
     const data = await listJobs(100)
     jobs.value = data.jobs || []
     if (!selectedId.value && jobs.value.length) selectedId.value = jobs.value[0].id
+    await loadJournal()
     if (showMessage) ElMessage.success('任务列表已刷新')
   } catch (error) {
     ElMessage.error(error.message)
@@ -117,6 +186,46 @@ onMounted(() => load())
 
 <template>
   <div v-loading="loading" class="section-stack">
+    <!-- 最近操作：Phase 8 在后端做了撤销能力，这里是它的入口。
+         跟下面的任务列表的区别：任务是「跑过什么」，这里是「能撤销什么」。 -->
+    <section class="app-card panel-card">
+      <div class="panel-title-row">
+        <h3 class="panel-title">最近操作</h3>
+        <div class="panel-title-actions">
+          <span class="panel-count">
+            <template v-if="undoableCount">可撤销 {{ undoableCount }} 条</template>
+            <template v-else>暂无可撤销的操作</template>
+          </span>
+        </div>
+      </div>
+
+      <ul v-if="journal.length" class="journal-list">
+        <li v-for="entry in journal" :key="entry.id" class="journal-item">
+          <div class="journal-item__body">
+            <span class="journal-item__title">{{ entry.title || entry.type }}</span>
+            <span class="journal-item__meta">
+              {{ formatShortTime(entry.at) }} · {{ sourceLabel(entry.source) }}
+              · 成功 {{ entry.done }}<template v-if="entry.failed"> · 失败 {{ entry.failed }}</template>
+            </span>
+          </div>
+
+          <span v-if="entry.undone" class="journal-item__state">已撤销</span>
+          <el-button
+            v-else-if="entry.undoable"
+            size="small"
+            :loading="undoing === entry.id"
+            @click="undoEntry(entry)"
+          >
+            撤销
+          </el-button>
+          <!-- 不可撤销的必须给出原因，否则看起来像按钮坏了 -->
+          <span v-else class="journal-item__locked" :title="whyLocked(entry)">不可撤销</span>
+        </li>
+      </ul>
+      <p v-else class="journal-empty">
+        还没有操作记录 —— 清理、迁移、整理跑完会出现在这里。
+      </p>
+    </section>
     <section class="jobs-layout">
       <article class="app-card panel-card">
         <div class="panel-title-row">
@@ -445,5 +554,66 @@ onMounted(() => load())
   .jobs-layout {
     grid-template-columns: 1fr;
   }
+}
+
+/* ---- 最近操作 ---- */
+.journal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.journal-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  background: var(--surface-2);
+  border-radius: 10px;
+}
+
+.journal-item__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.journal-item__title {
+  font-size: var(--fs-body);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.journal-item__meta {
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+}
+
+.journal-item__state {
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+  flex: none;
+}
+
+.journal-item__locked {
+  flex: none;
+  font-size: var(--fs-meta);
+  color: var(--ink-4);
+  cursor: help;
+  border-bottom: 1px dashed var(--ink-4);
+}
+
+.journal-empty {
+  margin: 0;
+  padding: 10px 2px;
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
 }
 </style>
