@@ -350,7 +350,7 @@ Element Plus 把 `--el-mask-color`（浅色下近白 `rgba(251,251,253,.72)`）*
 - **后台起进程 / 打包必须用工具的后台模式**：命令里写 `cmd &` 会在该次调用返回时被一起收走
   （日志空、端口没人听）；**PyInstaller 在前台跑也会被中途掐掉**（SIGTERM，日志停在 `Processing hook`）。
 - **跑 `tests/*.py` 要带 `PYTHONPATH=.`**；通过的测试**多数静默退出**（不打印汇总），
-  看退出码不要找输出行。`tests/smoke_test.py` 是端到端总闸（**106 项**），
+  看退出码不要找输出行。`tests/smoke_test.py` 是端到端总闸（**110 项检查**，含 1 项未配 Key 时跳过），
   另有 **41 个**专项测试文件（2026-10-18 复核；此前的「73 项 / 13 个」是旧数）。
   `pytest` 收的是 `test_*.py`，共 **339 项**；`smoke_test.py` 这类要起服务的脚本**不进** pytest。
 - **`smoke_test.py` 要显式给 `FILEPILOT_API`**：默认打到 `127.0.0.1:8000`（开发服务器，

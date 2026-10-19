@@ -601,6 +601,23 @@ def main() -> int:
           all({"time", "type", "result", "path", "note"} <= set(item) for item in logs.get("logs", [])))
     exported = call("POST", "/logs/export")
     check("日志可导出", exported.get("success") is True, exported.get("path", ""))
+    # ---- 操作流水（Phase 8）----
+    # 与操作日志的分工：日志是"跑过什么"，流水是"能撤销什么"。
+    print("\n[操作流水]")
+    journal_data = call("GET", "/journal")
+    entries = journal_data.get("entries") or []
+    check("流水有记录", bool(entries), f"{len(entries)} 条")
+    check("流水字段规范",
+          all({"id", "at", "type", "source", "done", "undoable", "undone"} <= set(item)
+              for item in entries))
+    stats = journal_data.get("stats") or {}
+    check("流水有界且有统计",
+          stats.get("limit") == 500 and "undoable" in stats, str(stats))
+    # 刚做过清理 + 还原，应该有一条可撤销或已撤销的 clean 记录
+    check("流水记录了清理动作",
+          any(item.get("type") == "clean" for item in entries),
+          ", ".join(sorted({item.get("type", "") for item in entries})))
+
 
     # ---- 总览 ----
     print("\n[首页总览]")
