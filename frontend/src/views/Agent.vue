@@ -148,6 +148,13 @@ const {
   submitModel,
   submitKey,
   clearKey,
+  providerOptions,
+  providerId,
+  needsBaseUrl,
+  providerError,
+  baseUrlDraft,
+  switchProvider,
+  saveBaseUrl,
 } = useAgentSettings()
 
 /* 权限档位：显示在「+」后面，点开切换 */
@@ -298,10 +305,13 @@ const LONG_TEXT = 320
 /* 后端 /api/settings/agent 不可用时的兜底显示 */
 const MODEL_OPTIONS_FALLBACK = ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner']
 
-// 兼容旧版后端：旧进程可能只返回 chat/reasoner，前端仍保留当前发行版模型选项。
-const modelOptions = computed(() => [
-  ...new Set([...(settings.value?.model_options || []), ...MODEL_OPTIONS_FALLBACK]),
-])
+// 只在后端**没给这个字段**时兜底（旧进程）。
+// 后端明确返回空数组 = 当前服务商的模型名未知（自定义网关），
+// 这时不该硬塞一排 deepseek 的名字 —— 用户点了必然 404。
+const modelOptions = computed(() => {
+  const fromServer = settings.value?.model_options
+  return Array.isArray(fromServer) ? fromServer : MODEL_OPTIONS_FALLBACK
+})
 
 let stopStream = null
 
@@ -2054,6 +2064,50 @@ onBeforeUnmount(() => {
               </template>
 
               <div class="panel panel--model">
+                <!-- 段零：服务商（Phase 12）。放在模型上面 —— 换服务商会清掉已保存的 Key，
+                     先选服务商再填 Key，顺序才对得上。 -->
+                <div class="panel__section">
+                  <div class="panel__title">服务商</div>
+                  <el-select
+                    :model-value="providerId"
+                    size="small"
+                    style="width: 100%"
+                    @change="switchProvider"
+                  >
+                    <el-option
+                      v-for="item in providerOptions"
+                      :key="item.id"
+                      :label="item.label"
+                      :value="item.id"
+                    />
+                  </el-select>
+
+                  <template v-if="needsBaseUrl">
+                    <div class="panel__keyrow" style="margin-top: 8px">
+                      <el-input
+                        v-model="baseUrlDraft"
+                        size="small"
+                        autocomplete="off"
+                        placeholder="https://你的网关/v1"
+                        @keydown.enter="saveBaseUrl"
+                      />
+                      <el-button size="small" type="primary" @click="saveBaseUrl">保存</el-button>
+                    </div>
+                    <small v-if="settings?.llm_base_url" class="panel__src">
+                      当前：{{ settings.llm_base_url }}
+                    </small>
+                    <!-- 风险提示是需求明确要求的：用户得知道对话内容和工具结果都会发到这个地址 -->
+                    <small class="panel__warn">
+                      对话内容与工具结果都会发往你填写的地址。请确认它可信 ——
+                      换成不熟悉的网关等于把数据交给对方。
+                    </small>
+                  </template>
+
+                  <small v-if="providerError" class="panel__warn">{{ providerError }}</small>
+                </div>
+
+                <div class="panel__divider"></div>
+
                 <!-- 段一：模型 -->
                 <div class="panel__section">
                   <div class="panel__title">模型</div>

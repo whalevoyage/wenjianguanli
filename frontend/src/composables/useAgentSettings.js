@@ -9,7 +9,7 @@
  * 那属于视图而不是数据，不搬。
  */
 import { computed, nextTick, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import {
   getAgentSettings,
@@ -32,7 +32,26 @@ export function useAgentSettings() {
   const showCustomModel = ref(false)
   const customModelInput = ref(null)
 
-  const modelLabel = computed(() => settings.value?.model || status.value?.model || DEFAULT_MODEL_NAME)
+  const modelLabel = computed(() => {
+    const value = settings.value?.model || status.value?.model
+    if (value) return value
+    // 自定义服务没有预设模型（后端返回空串）→ 明确说「未选择」，不要兜底成
+    // deepseek-flash：那会让用户以为正在用那个模型，实际发过去是个不存在的名字。
+    return settings.value?.provider === 'custom' ? '未选择模型' : DEFAULT_MODEL_NAME
+  })
+
+  /* ---- 服务商（Phase 12）----
+     后端已经把「往哪发」收进 providers.py，前端这里只负责选和填地址。
+     注意：换服务商后端会**清掉已保存的 key**，所以下面 switchProvider 会先确认一次。 */
+  const providerOptions = computed(() => settings.value?.provider_options || [])
+  const providerId = computed(() => settings.value?.provider || 'deepseek')
+  const providerLabelOf = computed(() => settings.value?.provider_label || '')
+  const providerError = computed(() => settings.value?.provider_error || '')
+  const needsBaseUrl = computed(
+    () => providerOptions.value.find(item => item.id === providerId.value)?.requires_base_url === true,
+  )
+  /* 地址输入框的草稿：留空表示不改，避免把掩码式的既有值当成"用户要清空" */
+  const baseUrlDraft = ref('')
 
   const permissionMode = computed(() => safety.value?.mode || 'standard')
   const permissionLabel = computed(() => safety.value?.label || '标准')
@@ -114,7 +133,53 @@ export function useAgentSettings() {
     try {
       settings.value = await saveAgentSettings({ api_key: '' })
       await reloadStatus()
-      ElMessage.success('已清除本地保存的 API Key')
+      ElMessage.success('已清除 API Key，配方与任务记录不受影响')
+    } catch (error) {
+      ElMessage.error(error.message)
+    }
+  }
+
+  /**
+   * 切换服务商。
+   *
+   * 必须先确认一次：后端在换服务商时会**清掉已保存的 key**（防止把 DeepSeek 的 key
+   * 发到别的地址）。这个行为是对的，但用户点一下 key 就没了会莫名其妙，所以要提前说明。
+   */
+  async function switchProvider(id) {
+    if (!id || id === providerId.value) return
+    const target = providerOptions.value.find(item => item.id === id)
+    try {
+      await ElMessageBox.confirm(
+        `切换到「${target?.label || id}」会清除当前已保存的 API Key`
+        + '（避免把上一个服务商的密钥发到新地址），切换后需要重新填写。继续？',
+        '切换服务商',
+        { type: 'warning', confirmButtonText: '切换', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+    try {
+      settings.value = await saveAgentSettings({ provider: id })
+      baseUrlDraft.value = ''
+      await reloadStatus()
+      ElMessage.success(`已切换到 ${target?.label || id}`)
+    } catch (error) {
+      ElMessage.error(error.message)
+    }
+  }
+
+  /** 保存自定义服务的接口地址 */
+  async function saveBaseUrl() {
+    const value = baseUrlDraft.value.trim()
+    if (!value) {
+      ElMessage.warning('请填写接口地址')
+      return
+    }
+    try {
+      settings.value = await saveAgentSettings({ llm_base_url: value })
+      baseUrlDraft.value = ''
+      await reloadStatus()
+      ElMessage.success('接口地址已保存')
     } catch (error) {
       ElMessage.error(error.message)
     }
@@ -134,6 +199,12 @@ export function useAgentSettings() {
     permissionModes,
     permissionGuards,
     permissionTone,
+    providerOptions,
+    providerId,
+    providerLabelOf,
+    providerError,
+    needsBaseUrl,
+    baseUrlDraft,
     loadSettings,
     loadSafety,
     reloadStatus,
@@ -141,5 +212,7 @@ export function useAgentSettings() {
     submitModel,
     submitKey,
     clearKey,
+    switchProvider,
+    saveBaseUrl,
   }
 }

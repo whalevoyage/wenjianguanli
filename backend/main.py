@@ -211,9 +211,15 @@ class SafetySettingsRequest(BaseModel):
 
 
 class AgentSettingsRequest(BaseModel):
-    """两个字段都可省略；传空串 = 清除该字段（回到环境变量/默认值）。"""
+    """字段都可省略；传空串 = 清除该字段（回到环境变量/默认值）。
+
+    `provider` / `llm_base_url` 是 Phase 12 加的服务商选择。
+    换服务商时后端会自动清掉已保存的 api_key（同一次请求里给了新 key 则先清后写）。
+    """
     api_key: str | None = None
     model: str | None = None
+    provider: str | None = None
+    llm_base_url: str | None = None
 
 
 class RecipeRequest(BaseModel):
@@ -837,7 +843,9 @@ def update_agent_settings(request: AgentSettingsRequest):
     「加密失败，未保存」。**绝不能吞掉再回 200** —— 那正是本轮修掉的旧行为。
     """
     try:
-        return agent.update_settings(request.api_key, request.model)
+        return agent.update_settings(
+            request.api_key, request.model, request.provider, request.llm_base_url
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

@@ -17,6 +17,7 @@ import json
 import urllib.error
 import urllib.request
 
+from .. import providers
 from . import agent
 
 EXPLAIN_SYSTEM = """你是本机文件清理工具的说明助手。用户会给你一个待清理的文件或文件夹的信息，
@@ -69,7 +70,7 @@ def explain(kind: str, item: dict) -> dict:
     }).encode("utf-8")
 
     request = urllib.request.Request(
-        agent.DEEPSEEK_URL,
+        providers.chat_url(),
         data=body,
         headers={
             "Content-Type": "application/json",

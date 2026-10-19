@@ -14,7 +14,7 @@ import re
 import urllib.error
 import urllib.request
 
-from .. import config, database, fsutil, permissions, store
+from .. import config, database, fsutil, permissions, providers, store
 from .agent_intent import (
     SPACE_INTENT_RE,
     clarify_questions,
@@ -55,7 +55,9 @@ from .agent_local_rules import (  # noqa: E402
     parse_local as parse_local,
 )
 
-DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+# 请求地址不再写死：由 backend/providers.py 按当前服务商决定（Phase 12）。
+# 以前这里有 DEEPSEEK_URL 常量，四处调用点各抄一遍，加第二个服务商时
+# 漏掉的那处不会报错，只会静默地继续打 DeepSeek。
 
 # 动作白名单、工具注册表、参数表与风险表统一定义在 services/agent_tools.py，
 # 这里只做再导出，保证老调用方（main.py / 测试）继续可用。
@@ -1064,7 +1066,7 @@ def query_local(message: str, context: dict | None = None) -> dict | None:
 def _call_deepseek(message: str, context: dict) -> dict:
     key = resolve_key()
     if not key:
-        raise RuntimeError("未配置 DEEPSEEK_API_KEY")
+        raise RuntimeError(f"未配置 {providers.label()} 的 API Key")
 
     body = json.dumps({
         "model": resolve_model(),
@@ -1080,7 +1082,7 @@ def _call_deepseek(message: str, context: dict) -> dict:
     }).encode("utf-8")
 
     request = urllib.request.Request(
-        DEEPSEEK_URL,
+        providers.chat_url(),
         data=body,
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
         method="POST",
@@ -1091,9 +1093,9 @@ def _call_deepseek(message: str, context: dict) -> dict:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "ignore")[:200]
-        raise RuntimeError(f"DeepSeek 调用失败（{exc.code}）：{detail}") from exc
+        raise RuntimeError(f"{providers.label()} 调用失败（{exc.code}）：{detail}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"无法连接 DeepSeek：{exc.reason}") from exc
+        raise RuntimeError(f"无法连接 {providers.label()}：{exc.reason}") from exc
 
     content = (payload.get("choices") or [{}])[0].get("message", {}).get("content") or "{}"
     try:
@@ -1133,7 +1135,7 @@ def _call_deepseek_tools(message: str, context: dict) -> dict:
 
     key = resolve_key()
     if not key:
-        raise RuntimeError("未配置 DEEPSEEK_API_KEY")
+        raise RuntimeError(f"未配置 {providers.label()} 的 API Key")
 
     body = json.dumps({
         "model": resolve_model(),
@@ -1149,7 +1151,7 @@ def _call_deepseek_tools(message: str, context: dict) -> dict:
     }).encode("utf-8")
 
     request = urllib.request.Request(
-        DEEPSEEK_URL,
+        providers.chat_url(),
         data=body,
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
         method="POST",
@@ -1159,9 +1161,9 @@ def _call_deepseek_tools(message: str, context: dict) -> dict:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "ignore")[:200]
-        raise RuntimeError(f"DeepSeek 调用失败（{exc.code}）：{detail}") from exc
+        raise RuntimeError(f"{providers.label()} 调用失败（{exc.code}）：{detail}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"无法连接 DeepSeek：{exc.reason}") from exc
+        raise RuntimeError(f"无法连接 {providers.label()}：{exc.reason}") from exc
 
     message_obj = (payload.get("choices") or [{}])[0].get("message", {}) or {}
     calls: list[dict] = []
@@ -1355,7 +1357,7 @@ def _iter_deepseek_stream(message: str, context: dict, usage: dict):
     """逐块读 DeepSeek 的 SSE 流，把增量正文 yield 出去，token 用量写进 usage。"""
     key = resolve_key()
     if not key:
-        raise RuntimeError("未配置 DEEPSEEK_API_KEY")
+        raise RuntimeError(f"未配置 {providers.label()} 的 API Key")
 
     body = json.dumps({
         "model": resolve_model(),
@@ -1372,7 +1374,7 @@ def _iter_deepseek_stream(message: str, context: dict, usage: dict):
     }).encode("utf-8")
 
     request = urllib.request.Request(
-        DEEPSEEK_URL,
+        providers.chat_url(),
         data=body,
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
         method="POST",
@@ -1400,9 +1402,9 @@ def _iter_deepseek_stream(message: str, context: dict, usage: dict):
                     yield delta
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "ignore")[:200]
-        raise RuntimeError(f"DeepSeek 调用失败（{exc.code}）：{detail}") from exc
+        raise RuntimeError(f"{providers.label()} 调用失败（{exc.code}）：{detail}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"无法连接 DeepSeek：{exc.reason}") from exc
+        raise RuntimeError(f"无法连接 {providers.label()}：{exc.reason}") from exc
 
 
 def _find_json_objects(text: str) -> list[str]:
