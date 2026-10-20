@@ -80,3 +80,9 @@ backups/
 frontend/.vk/
 frontend/.vl/
 frontend/.vm/
+
+# 打包中间产物（PyInstaller 的 dist/work 改名了，别入库）
+/dist_pack/
+/build_pack/
+/release_old_*/
+/.venv-packaging/

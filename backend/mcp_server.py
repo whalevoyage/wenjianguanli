@@ -44,13 +44,13 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from backend import fsutil  # noqa: E402
+from backend import config, fsutil  # noqa: E402
 from backend.services import duplicates, explain, junk, overview, scan, similar  # noqa: E402
 from backend.services.headless import HeadlessContext as Headless  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "atlas"
-SERVER_VERSION = "2.0.0"
+SERVER_VERSION = config.APP_VERSION
 
 # 单次返回的清单上限 —— MCP 的返回是塞进模型上下文的，不能无限长
 MAX_ITEMS = 200

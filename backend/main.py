@@ -22,7 +22,7 @@ from .services import (
     scan, similar, snapshot, virtual,
 )
 
-app = FastAPI(title="FilePilot Lite API", version="2.0.0")
+app = FastAPI(title="FilePilot Lite API", version=config.APP_VERSION)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
@@ -307,7 +307,7 @@ def _launch(job_type: str, title: str, target: str, params: dict, worker: Callab
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "filepilot-lite", "version": "2.0.0", "time": fsutil.now_iso()}
+    return {"status": "ok", "service": "filepilot-lite", "version": config.APP_VERSION, "time": fsutil.now_iso()}
 
 
 @app.get("/api/diagnostics")

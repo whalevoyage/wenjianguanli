@@ -3,6 +3,7 @@
 所有"什么能碰、什么不能碰、什么算垃圾"的判断都集中在这里，
 其他模块只引用，不自己写死规则。
 """
+
 from __future__ import annotations
 
 import fnmatch
@@ -13,6 +14,10 @@ import string
 import sys
 from functools import lru_cache
 from pathlib import Path
+
+# 全项目唯一版本号：/api/health、FastAPI 元信息、MCP handshake 都读这里。
+# 以前散在 3 处硬编码，改漏了就会出现「界面说 2.1.0、health 说 2.0.0」。
+APP_VERSION = "2.1.0"
 
 APP_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 

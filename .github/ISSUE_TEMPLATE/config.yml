@@ -1,0 +1,7 @@
+# 空白 issue 关掉：让报告走模板，省掉「我点了它坏了」这种没法查的描述。
+blank_issues_enabled: false
+
+contact_links:
+  - name: 安全问题（不要公开报）
+    url: https://github.com/whalevoyage/wenjianguanli/security/advisories/new
+    about: 权限门禁被绕过、密钥泄露、能删到不该删的地方 —— 走私密报告，别开公开 issue。
