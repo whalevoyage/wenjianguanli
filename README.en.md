@@ -44,7 +44,7 @@ If something goes wrong: **startup failure / blank page** → `%LOCALAPPDATA%\At
 Get-FileHash .\Atlas-2.1.0-win64-portable.zip -Algorithm SHA256
 ```
 
-The full SHA256 for 2.1.0 is in the `.sha256` file attached to the release. It changes with each release — always defer to the release page.
+Download the `.sha256` sidecar with the same filename as the ZIP and compare it with your local `Get-FileHash` output. If the release has no matching sidecar, its checksum file has not been published; do not reuse a hash from another build or version.
 
 ### For users: installer
 

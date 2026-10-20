@@ -44,7 +44,7 @@ AI 只负责听懂你说的话、生成计划 —— 真正碰文件的是本地
 Get-FileHash .\Atlas-2.1.0-win64-portable.zip -Algorithm SHA256
 ```
 
-2.1.0 的 SHA256 完整值见 Release 附件里的 `.sha256` 文件。版本升级后这个值会变，以 Release 页面为准。
+请下载与 ZIP 同名的 `.sha256` sidecar 并与本地 `Get-FileHash` 结果比对。若 Release 页面没有对应 sidecar，表示该版本的校验文件尚未发布；不要沿用其他构建或版本的哈希。
 
 ### 普通用户：安装包
 
