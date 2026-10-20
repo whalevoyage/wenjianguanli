@@ -37,6 +37,7 @@ const isMobile = ref(window.innerWidth < 960)
 const navOpen = ref(false)
 const sidebarCollapsed = ref(window.innerWidth >= 960 && window.innerWidth < 1280)
 const backendOnline = ref(false)
+const appVersion = ref('')
 const backendCheckedAt = ref('')
 
 const themeIcon = computed(
@@ -141,6 +142,9 @@ async function checkBackend() {
   try {
     const result = await healthCheck()
     backendOnline.value = result.status === 'ok'
+    // 版本号来自后端（config.APP_VERSION 一处），界面只负责显示 ——
+    // 报 bug 时用户能直接在侧栏看到，不用去翻下载包的文件名。
+    appVersion.value = result.version || ''
   } catch {
     backendOnline.value = false
   } finally {
@@ -193,6 +197,7 @@ const today = computed(() =>
         :allow-collapse="true"
         :theme-icon="themeIcon"
         :theme-label="themeLabel"
+        :version="appVersion"
         @toggle="toggleSidebar"
         @cycle-theme="toggleTheme"
       />
@@ -212,6 +217,7 @@ const today = computed(() =>
         :collapsed="false"
         :theme-icon="themeIcon"
         :theme-label="themeLabel"
+        :version="appVersion"
         @cycle-theme="toggleTheme"
         @navigate="navOpen = false"
       />

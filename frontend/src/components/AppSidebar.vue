@@ -15,6 +15,8 @@ defineProps({
   allowCollapse: { type: Boolean, default: false },
   themeIcon: { type: [Object, Function], default: null },
   themeLabel: { type: String, default: '跟随系统' },
+  // 版本号：后端 /api/health 给，收起时与未拿到时不显示
+  version: { type: String, default: '' },
 })
 
 defineEmits(['navigate', 'toggle', 'cycle-theme'])
@@ -62,6 +64,8 @@ defineEmits(['navigate', 'toggle', 'cycle-theme'])
     </nav>
 
     <div class="sidebar-foot">
+      <!-- 版本号：平时不打扰，报问题时要能一眼看到并复制 -->
+      <div v-if="!collapsed && version" class="foot-version">v{{ version }}</div>
       <button
         type="button"
         class="foot-row"
@@ -315,5 +319,11 @@ defineEmits(['navigate', 'toggle', 'cycle-theme'])
   grid-template-columns: 1fr;
   justify-items: center;
   padding: 0;
+}
+.foot-version {
+  padding: 0 12px 8px;
+  font-size: var(--fs-micro);
+  color: var(--ink-4);
+  user-select: text;
 }
 </style>
