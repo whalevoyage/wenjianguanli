@@ -298,7 +298,7 @@ class _CancelAwareReader:
 `Agent.vue` 的记忆恢复是异步的，`v-if="!messages.length"` 的空欢迎页会先闪出来 ——
 用 `hydrating` ref 闸住。「新建任务」（用户主动要空白页）不受影响。
 
-### Agent 页默认落在「新任务」欢迎页（详见 `docs/UI_REVAMP.md` v26）
+### Agent 页默认落在「新任务」欢迎页
 
 用 `sessionStorage` 的 `filepilot.agent.booted` 区分「本次启动首访」与「同一次运行内切回」——
 首访一律 `newConversation()`；同一次运行内**只认 localStorage 里那条**，
@@ -320,7 +320,7 @@ Element Plus 把 `--el-mask-color`（浅色下近白 `rgba(251,251,253,.72)`）*
 必须 `!important`，方向从"提亮"改成"压暗"。
 **别去改 `--el-mask-color` 本身**：它同时管 `.el-overlay`（弹窗遮罩），会波及所有弹窗。
 
-### 长列表页的「白屏一下」= 主线程长任务 + 合成器淡出（详见 `docs/UI_REVAMP.md` v27）
+### 长列表页的「白屏一下」= 主线程长任务 + 合成器淡出
 
 `Logs.vue` 原本把 464 条日志一次性全渲染进 `el-table`（464 行 × 5 列，4 列带自定义 slot），
 主线程阻塞 **1251ms**；而离场页的 `opacity` 淡出跑在**合成器线程**上、不受阻塞影响会一路跑到底，

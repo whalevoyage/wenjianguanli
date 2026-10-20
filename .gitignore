@@ -86,3 +86,6 @@ frontend/.vm/
 /build_pack/
 /release_old_*/
 /.venv-packaging/
+
+# 内部开发文档（设计过程、AI 提示词、竞品调研）—— 不进开源仓库
+/_local_docs/
