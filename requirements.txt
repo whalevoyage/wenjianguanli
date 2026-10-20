@@ -1,5 +1,5 @@
 # Minimal compatible runtime dependencies for a quick source install.
 # This is intentionally not a reproducible lock. Use requirements.lock for
 # contributor/CI installs and packaging/requirements-release.lock for releases.
-fastapi>=0.110
+fastapi>=0.143.3
 uvicorn[standard]>=0.29
