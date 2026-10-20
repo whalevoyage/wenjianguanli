@@ -83,6 +83,8 @@ def test_update_rejects_unknown_provider(memory_settings):
 # ---------------------------------------------------------------------------
 
 def test_stored_key_wins(memory_settings, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("FILEPILOT_LLM_API_KEY", raising=False)
     memory_settings["api_key"] = "enc:sk-stored"
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env")
     assert providers.api_key() == "sk-stored"
@@ -91,6 +93,7 @@ def test_stored_key_wins(memory_settings, monkeypatch):
 def test_provider_specific_env_is_used(memory_settings, monkeypatch):
     agent_settings.update_settings(provider="openai")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("FILEPILOT_LLM_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
     assert providers.api_key() == "sk-openai"
 
@@ -98,8 +101,33 @@ def test_provider_specific_env_is_used(memory_settings, monkeypatch):
 def test_legacy_deepseek_env_still_works(memory_settings, monkeypatch):
     """老用户机器上只有 DEEPSEEK_API_KEY，抽 provider 当天不该突然"未配置"。"""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("FILEPILOT_LLM_API_KEY", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-legacy")
     assert providers.api_key() == "sk-legacy"
+
+
+def test_openai_never_falls_back_to_deepseek_env(memory_settings, monkeypatch):
+    agent_settings.update_settings(provider="openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("FILEPILOT_LLM_API_KEY", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-must-not-leak")
+    assert providers.api_key() == ""
+
+
+def test_custom_never_falls_back_to_deepseek_env(memory_settings, monkeypatch):
+    agent_settings.update_settings(provider="custom", llm_base_url="https://gw.example.com/v1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("FILEPILOT_LLM_API_KEY", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-must-not-leak")
+    assert providers.api_key() == ""
+
+
+def test_custom_provider_specific_env_is_used(memory_settings, monkeypatch):
+    agent_settings.update_settings(provider="custom", llm_base_url="https://gw.example.com/v1")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("FILEPILOT_LLM_API_KEY", "sk-custom")
+    assert providers.api_key() == "sk-custom"
 
 
 # ---------------------------------------------------------------------------

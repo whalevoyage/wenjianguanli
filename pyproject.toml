@@ -1,7 +1,7 @@
 [project]
 name = "atlas-filepilot"
 version = "2.1.0"
-description = "本地文件管理台：扫描 / 查重 / 清理 / 跨盘迁移 / 空间地图 + Agent 助手（除助手页外零 token、纯本地）"
+description = "Windows 本地文件管理台：扫描、查重、清理、迁移、备份与 Agent 助手；模型调用按需启用"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "王鑫焱 (wangxinyan)" }]

@@ -1,10 +1,5 @@
-# 运行时依赖（宽松约束，交给 pip 解析）。
-# 要可复现的精确版本，用 `pip install -r requirements.lock`；
-# 那份锁文件也是 CI 实际安装的依据。
-
+# Minimal compatible runtime dependencies for a quick source install.
+# This is intentionally not a reproducible lock. Use requirements.lock for
+# contributor/CI installs and packaging/requirements-release.lock for releases.
 fastapi>=0.110
 uvicorn[standard]>=0.29
-pydantic>=2.0
-# 打包后用它开原生窗口（Windows 走 WebView2）。源码运行不装也行 ——
-# packaging/launcher.py 检测不到就自动退回浏览器，功能不受影响。
-pywebview>=6.0,<7

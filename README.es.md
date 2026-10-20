@@ -14,9 +14,9 @@
 
 Una herramienta de limpieza de disco y gestión de archivos para Windows: análisis por escaneo, detección de duplicados, limpieza de archivos basura, migración entre discos y mapa de espacio.
 
-Cada paso **muestra primero la lista de archivos y espera tu confirmación**. Los archivos eliminados van primero a cuarentena y se pueden recuperar después.
+Las operaciones de escritura muestran primero la lista de archivos afectados y esperan tu confirmación. Por defecto, la limpieza mueve los archivos a cuarentena, desde donde se pueden restaurar. Las acciones irreversibles se indican claramente y requieren una confirmación adicional.
 La IA solo entiende lo que pides y redacta un plan; quien toca los archivos es el código local.
-Salvo las preguntas al Agente, todo funciona en local, sin conexión y sin cuenta.
+Salvo las solicitudes al modelo del Agente y las explicaciones de IA que pidas expresamente, el análisis, la búsqueda de duplicados, la limpieza, la migración y las copias de seguridad se ejecutan localmente. No hace falta una cuenta.
 
 > No decide por ti. Te muestra exactamente qué archivos va a tocar cada acción.
 
@@ -59,7 +59,7 @@ Desinstalar es borrar esa carpeta.
 - La migración copia y verifica primero; el origen se procesa solo si la verificación pasa.
 - Las operaciones largas se ejecutan como tareas en segundo plano con progreso, cancelación y reversión.
 - La carpeta del propio proyecto, la carpeta de estado y la cuarentena están protegidas.
-- Nunca se escribe en carpetas del sistema (Windows, Program Files, ProgramData).
+- Las carpetas del sistema no se escanean por defecto. El modo estándar bloquea las escrituras allí; el modo de acceso completo permite relajar expresamente esa protección. Los datos propios de Atlas y la cuarentena siguen protegidos.
 - Se excluyen por defecto `node_modules`, `.git`, `__pycache__`, `.venv`, `dist`, `build` y similares.
 - Antes de migrar o copiar se comprueba el espacio libre en el destino.
 - Escucha solo en `127.0.0.1`, no se expone a la red local.

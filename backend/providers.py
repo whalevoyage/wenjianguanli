@@ -125,16 +125,15 @@ def chat_url(spec: Provider | None = None) -> str:
 
 
 def api_key(spec: Provider | None = None) -> str:
-    """key 的优先级：设置文件（加密） > 该服务的环境变量 > DEEPSEEK_API_KEY 兜底。
+    """key 的优先级：设置文件（加密） > 当前服务商专属环境变量。
 
-    最后那条兜底是为了不打断老用户：之前只有 DeepSeek，大家机器上都设的
-    `DEEPSEEK_API_KEY`，抽 provider 当天不该让他们突然"未配置"。
+    DeepSeek 的专属变量兼容旧用户；绝不把一个服务商的 key 发给另一个服务商。
     """
     spec = spec or resolve()
     stored = secrets.unprotect((store.read_agent_settings().get("api_key") or "").strip())
     if stored:
         return stored
-    return (os.getenv(spec.key_env) or "").strip() or (os.getenv("DEEPSEEK_API_KEY") or "").strip()
+    return (os.getenv(spec.key_env) or "").strip()
 
 
 def label() -> str:

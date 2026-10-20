@@ -14,9 +14,9 @@
 
 Disk cleanup and file management for Windows: scan analysis, duplicate detection, junk cleanup, cross-drive migration, space map.
 
-Every step shows you the file list first and waits for your confirmation. Deleted files go to quarantine first, so you can undo later.
+File write operations show you the proposed file list and wait for confirmation. By default, cleanup moves files to quarantine where they can be restored; irreversible actions are labeled and require additional confirmation.
 The AI only understands what you say and drafts a plan — the code that actually touches your files is local.
-Apart from Agent Q&A, everything runs locally, works offline, and needs no account.
+Except for Agent model requests and AI explanations you explicitly request, scanning, duplicate detection, cleanup, migration and backup run locally. No account is required.
 
 > It doesn't make decisions for you. It lays out exactly which files an action is about to touch.
 
@@ -59,16 +59,23 @@ and requires **no administrator rights**. Install Inno Setup 6 and compile it yo
 ### From source (developers)
 
 ```powershell
-# backend (listens on 8000 by default)
+# contributors and CI: install the exact lock
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python -m uvicorn backend.main:app --port 8000
+$env:PYTHONUTF8 = "1"
+.venv\Scripts\python -m pip install -r requirements.lock
+cd frontend
+npm ci
+cd ..
+
+# start the backend (listens on 8000 by default)
+.venv\Scripts\python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
 # frontend (separate terminal)
 cd frontend
-npm install
 npm run dev          # 5173; calls http://127.0.0.1:8000/api directly (no vite proxy configured)
 ```
+
+For a quick compatible backend install, use `pip install -r requirements.txt`; it has broad version ranges and is not a reproducible baseline. Windows release builds use `packaging/requirements-release.lock`.
 
 If the backend is not on 8000, override with `VITE_API_BASE_URL=http://127.0.0.1:<port>/api`.
 
@@ -80,12 +87,11 @@ python packaging\launcher.py
 
 Full packaging notes are in `packaging/README.md`.
 
-### Agent model access (optional)
+### Agent and AI explanations (optional)
 
-Everything except the Agent — scanning, duplicate detection, cleanup, migration, backup, logging —
-**runs entirely locally with zero network calls and zero tokens**.
+Scanning, duplicate detection, cleanup, migration, backup and logging run locally by default. Agent model requests and AI explanations you explicitly request connect to the configured model provider.
 
-Natural-language understanding needs a model API key, configured from **inside the Agent page**.
+Natural-language understanding can use DeepSeek, OpenAI or a custom OpenAI-compatible endpoint. Configure the provider and API key from **inside the Agent page**.
 The key is stored on this machine encrypted with Windows DPAPI (never plaintext); the API only ever
 returns a masked value. Without a key the Agent still works, falling back to local rules.
 
@@ -114,7 +120,7 @@ recovery path afterwards.
 
 ![Junk cleanup preview](docs/images/junk-scan.png)
 
-### Every step can be undone
+### Undoable operations leave a record
 
 Cleanup and organization leave a record in the operation journal: when it ran, what triggered it, how
 many items succeeded or failed, and whether it can still be undone. Click "Undo" and the batch is
@@ -140,8 +146,9 @@ operations to a model.
 
 ### Main work happens locally
 
-Most features need no cloud service, no account, and never upload scan results. You can scan, analyse,
-clean up, migrate and back up while offline.
+Most features need no cloud service or account. Scanning, analysis, cleanup, migration and backup run
+locally; model requests and AI explanations you explicitly request can send the data described in
+[PRIVACY.md](PRIVACY.md) to your configured provider.
 
 ### Room to grow into local automation
 
@@ -168,8 +175,8 @@ verification and rollback.
 
 ### People who value privacy and local control
 
-For those who don't want to create an account, upload directory listings, or depend on a remote cloud
-service just to tidy their own computer.
+For those who want routine file scans and cleanup to stay local, without an account or cloud service.
+Optional Agent requests can send selected paths and relevant results to the configured provider.
 
 ### People who want natural language, with a safety net
 
@@ -205,8 +212,8 @@ delete" black box.
 ### 4. Local-first, cloud optional
 
 Scanning, analysis, duplicate detection, migration, backup, logging and job management all run on this
-machine by default — no account, no remote database. The Agent prefers local rules: common file intents
-cost zero tokens, and a model is only called when nothing matches.
+machine by default — no account, no remote database. The Agent prefers local rules for common file
+intents; model requests and AI explanations you explicitly ask for use the configured provider.
 
 ### 5. Natural language separated from deterministic file operations
 
@@ -241,7 +248,7 @@ on a personal machine.
 | Cross-drive Migration | Copy and verify item by item; source is only handled after verification passes; supports rollback |
 | Project Backup | ZIP snapshots excluding common dependency and build folders; restore verification supported |
 | Job Center | Live progress, errors, cancellation and rollback status |
-| Trash / Quarantine | Cleanup goes to quarantine first and can be restored in place |
+| Trash / Quarantine | Manual cleanup goes to quarantine by default and can be restored when possible; irreversible cleanup is labeled |
 | Operation Log | Audit records, exportable |
 
 ### Multiple sources
@@ -268,11 +275,11 @@ MCP boundary details: [`docs/MCP_SECURITY.md`](docs/MCP_SECURITY.md) (Chinese).
 
 ## Safety model
 
-- Cleanup produces a list first; files go to quarantine only after confirmation — never a direct physical delete.
+- Cleanup shows a list before confirmation. Manual cleanup defaults to quarantine; Agent cleanup and trash purge are irreversible and clearly labeled.
 - Migration copies first and verifies; the source is only touched after verification passes.
 - Long operations run as background jobs with progress, cancellation and rollback.
 - The project's own directory, the state directory and the quarantine are protected.
-- System directories (Windows, Program Files, ProgramData) are never written to.
+- System directories are excluded from scans by default. Standard mode blocks writes there; Full Access can explicitly relax that path protection, while Atlas's own data and quarantine remain protected.
 - `node_modules`, `.git`, `__pycache__`, `.venv`, `dist`, `build` and similar are excluded by default.
 - Free space at the destination is checked before migration and backup.
 - Listens on `127.0.0.1` only — not exposed to the LAN.
@@ -409,8 +416,10 @@ installer wizard.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `DEEPSEEK_API_KEY` | Optional model fallback for the Agent | unset |
-| `DEEPSEEK_MODEL` | Model ID | `deepseek-flash` |
+| `DEEPSEEK_API_KEY` | DeepSeek provider environment key | unset |
+| `OPENAI_API_KEY` | OpenAI provider environment key | unset |
+| `FILEPILOT_LLM_API_KEY` | Custom provider environment key | unset |
+| `DEEPSEEK_MODEL` | Default DeepSeek model ID | `deepseek-flash` |
 | `FILEPILOT_DATA_DIR` | Override the user data directory | `%LOCALAPPDATA%\Atlas` in releases |
 | `FILEPILOT_TRASH` | Fallback location for quarantine | `FilePilotTrash` under your user directory |
 | `FILEPILOT_SCAN_LIMIT` | Max entries per scan | `400000` |
@@ -420,8 +429,10 @@ In development the state directory defaults to `.filepilot` in the project root;
 
 ## Data and privacy
 
-Apart from two **user-initiated** network touchpoints (the Agent page and the "?" explanation), file
-contents, scan results and job state never leave your machine.
+Scanning, duplicate detection, cleanup, migration, backup and job management run locally by default,
+and Atlas does not upload file binaries. When you use Agent or explicitly request an AI explanation,
+messages, necessary paths, tool result summaries and full-text search snippets may be sent to the
+configured model provider. See [PRIVACY.md](PRIVACY.md) for details.
 
 One detail worth calling out: **when you ask the Agent to search file contents**, matching snippets do
 enter the model context — that is inherent to the action itself. Scan, duplicate detection, cleanup and

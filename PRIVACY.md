@@ -1,56 +1,47 @@
 # Privacy
 
-一句话：**Atlas 不上传你的任何文件、文件名、路径或目录结构。**
+Atlas does not upload file binaries. Scanning, duplicate detection, cleanup, migration, backup and other file management run locally by default. When you use Agent or request an AI explanation, the information needed for that request may be sent to the model provider you configured.
 
-## 数据存在哪里
+## Where data is stored
 
-| 内容 | 位置 |
-|---|---|
-| 设置、任务记录、隔离区账本、操作流水 | `%LOCALAPPDATA%\Atlas`（便携版相对目录） |
-| 隔离区里的文件 | 源文件所在盘的 `_filepilot_trash`（同盘移动，快且不易中途失败） |
-| 扫描/查重的中间结果 | 同上数据目录，任务结束即清理 |
+| Data | Location |
+| --- | --- |
+| Settings, task records, quarantine ledger and operation journal | `%LOCALAPPDATA%\Atlas` (or the configured data directory) |
+| Quarantined files | `_filepilot_trash` on the source volume |
+| Scan and duplicate intermediate results | The same local data directory; temporary results are removed when the task finishes |
 
-卸载 = 删掉这两个目录。没有注册表残留、没有后台服务。
+The app does not require an account or run a background service. Removing the app does not automatically remove quarantined files stored beside their original volumes.
 
-## 什么时候会联网
+## When Atlas connects to a network service
 
-全项目**只有两处**：
+Atlas connects to a model service only when you:
 
-1. **Agent 助手页** —— 你主动发消息时，那句话、对话上下文、以及工具返回的**结果摘要**
-   会发给你配置的模型服务（默认 DeepSeek）。
-2. **待清理项旁边的「?」解释** —— **必须手动点**，不点就永远不联网。
+1. Send a message that requires the Agent model, or ask the Agent to use model-based understanding.
+2. Click an AI explanation control for a cleanup item.
 
-其余全部功能（扫描 / 查重 / 垃圾清理 / 迁移 / 备份 / 空间地图 / 日志 / 操作撤销）
-**零 token、纯本地、可断网**。
+Common Agent requests may be handled by local rules without a model call. Scanning, duplicate detection, file cleanup, migration, backup, search indexing and the operation journal do not upload data by themselves.
 
-## 联网时会发出去什么
+## Information that may be sent to the configured provider
 
-- 你的消息文本、最近几轮对话、当前选中的目录路径（模型要知道在哪儿操作）。
-- 工具执行结果的**摘要**（例如「隔离区 12 项，约 340 MB」）。
+Depending on the request, a model call may include:
 
-**不会上传文件本体**（整份文件的内容不会被打包发走）。
+- Your message and relevant conversation context.
+- The selected directory path or paths needed to plan the requested file operation.
+- Tool descriptions and parameters used to let the model prepare a plan.
+- Result summaries returned by local tools.
+- Text snippets from full-text search results when you ask the Agent to search file contents.
+- The cleanup-item details needed to explain an item when you request an AI explanation.
 
-但有一条要说清楚：
+Atlas does not send file binaries as part of these requests. Full-text search snippets are an exception to the general rule that file contents stay local: matching text excerpts may be included in the model context. Avoid asking the Agent to search sensitive content if you do not want those excerpts sent to the configured provider.
 
-> **如果你让 Agent 搜索文件内容**，全文检索命中的**正文片段**（`snippet`，带关键词上下文）
-> 会随工具结果一起进入模型上下文。这是"全文检索"这个动作本身决定的 ——
-> 不把片段发给模型，它就没法告诉你哪句话在哪份文件里。
->
-> 扫描、查重、垃圾清理、迁移这些**不会**把文件内容发出去：它们只读文件名、大小、哈希。
+## API keys and providers
 
-所以如果你在 Agent 页让它"在所有文档里找某段话"，请当作"这段内容会被你配置的模型服务看到"。
+- Atlas supports DeepSeek, OpenAI and a custom OpenAI-compatible endpoint.
+- A key entered in settings is protected with Windows DPAPI and is not returned in full by the settings API.
+- Environment variables are provider-specific: `DEEPSEEK_API_KEY`, `OPENAI_API_KEY` and `FILEPILOT_LLM_API_KEY`. A key for one provider is not used as a fallback for another provider.
+- When a model request is made, the configured provider receives its API key as authentication for that request. Do not use an endpoint you do not trust.
+- Each provider's retention and processing practices are governed by that provider's own policies, outside Atlas's control.
 
-## API Key
+## Telemetry and updates
 
-- 存在本地设置文件里，用 Windows DPAPI 加密（绑定当前用户）。
-- 界面上只回显掩码（`sk-ab…cd`），**从不回传完整 key**。
-- 加密失败时**拒绝保存**，不会退化成明文（除非你显式开开发模式，界面会提示）。
-
-## 遥测
-
-没有。不发统计、不报崩溃、不检查更新。
-
-## 第三方服务
-
-只有你配置的模型服务（DeepSeek 或兼容 OpenAI 接口的其它服务）。
-它们怎么处理请求数据，取决于各自的隐私政策 —— 这部分不在 Atlas 控制范围内。
+Atlas does not send analytics or crash reports and does not automatically check for updates. Users download updates manually from GitHub Releases.

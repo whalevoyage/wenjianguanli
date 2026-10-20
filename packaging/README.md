@@ -1,54 +1,59 @@
-# Atlas Windows 打包
+# Atlas Windows packaging
 
-## 怎么出包
+## Release build
 
-运行 `packaging/build_release.ps1`。脚本会：
-
-1. 构建前端（`npm run build`）
-2. 创建隔离的打包虚拟环境 `.venv-packaging` 并装 PyInstaller
-3. 用 PyInstaller 生成 `release/Atlas/`
-4. 把 `frontend/dist/*` 复制成 `release/Atlas/web/`
-5. 把 `Atlas.iss` 复制到 `release/`
-
-随后用 Inno Setup 的 `ISCC.exe` 编译 `release/Atlas.iss`，产出 `Atlas-Setup-x.y.z.exe`。
+Run this from the repository root in Windows PowerShell with CPython 3.12, Node.js/npm and network access to the package registries:
 
 ```powershell
 .\packaging\build_release.ps1
+```
+
+The script performs the release pipeline in order:
+
+```text
+npm ci
+→ npm run build
+→ recreate .venv-packaging
+→ install packaging/requirements-release.lock
+→ PyInstaller onedir build
+→ copy frontend dist into release/Atlas/web
+→ create release/Atlas-x.y.z-win64-portable.zip
+→ create and verify the .sha256 sidecar
+→ extract ZIP and run packaged smoke checks
+```
+
+The lock pins PyInstaller, Pillow, pywebview and their complete Python dependency set. It was captured from the Windows packaging environment used for the published 2.1.0 build. The script checks that `backend/config.py`, `pyproject.toml` and `Atlas.iss` use the same version before creating an artifact. The archive name comes from `pyproject.toml`.
+
+Build outputs are written under ignored `dist/` and `release/` directories. The script replaces only its known generated outputs (`dist/Atlas`, `release/Atlas`, the versioned ZIP and sidecar, and `release/Atlas.iss`).
+
+## Packaged smoke
+
+`smoke_release.ps1` extracts the ZIP into a unique temporary directory, launches the actual `Atlas.exe` with an isolated data directory and `FILEPILOT_OPEN_BROWSER=0`, then verifies:
+
+- `/api/health` returns `status=ok` and the expected version.
+- `/` returns the packaged HTML UI.
+- The process is stopped and the temporary directory is removed afterward.
+
+The release build invokes this automatically. To run it against an existing archive:
+
+```powershell
+& .\packaging\smoke_release.ps1 `
+  -ArchivePath .\release\Atlas-2.1.0-win64-portable.zip `
+  -ExpectedVersion 2.1.0
+```
+
+## Optional installer
+
+After a successful portable build, install Inno Setup 6 and run:
+
+```powershell
 & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" .\release\Atlas.iss
 ```
 
-## 唯一权威的构建方式是这个脚本
+The installer is per-user: it installs to `%LOCALAPPDATA%\Atlas` and uses `PrivilegesRequired=lowest`, so it does not require administrator rights. The portable ZIP remains the primary release artifact.
 
-`Atlas.spec` 只负责 PyInstaller 那一步，**单独用它只会得到只有后端的 `dist/Atlas/`**
-（没有 `web/`，双击后只有 API、没有界面）。前端是靠脚本第 4 步补进去的。
-spec 留着是为了调试；出包一律走脚本。
+## Development and CI dependencies
 
-## 启动器行为（`packaging/launcher.py`）
-
-发行版双击 `Atlas.exe` 之后：
-
-- **不弹控制台窗口**（spec 里 `console=False`）
-- **自动打开浏览器**到界面地址
-- **端口**：优先 `8000`；被别的程序占用时自动换一个空闲端口，并写进日志
-- **已有实例**：本机已经在跑 Atlas 时不再起第二个进程（两个进程写同一个数据目录会打架），
-  直接把浏览器指过去
-- **日志**：`%LOCALAPPDATA%\Atlas\atlas.log`（滚动，最多 1MB + 1 个备份）
-  —— 没有控制台，这是唯一的排查线索
-- **启动失败**会弹消息框并指向日志文件，而不是"什么都没发生"
-
-环境变量：
-
-| 变量 | 作用 |
-|---|---|
-| `FILEPILOT_PORT` | 指定端口（被占用时仍会自动换） |
-| `FILEPILOT_OPEN_BROWSER` | 设 `0` 则不自动开浏览器（当后台服务跑时用） |
-| `FILEPILOT_DATA_DIR` | 指定数据目录（默认 `%LOCALAPPDATA%\Atlas`） |
-
-## 用户环境要求
-
-发行版不需要用户安装 Python、Node 或 npm。
-程序只监听 `127.0.0.1`，数据默认保存到 `%LOCALAPPDATA%\Atlas`。
-
-> 注意：`Atlas.iss` 目前是 `PrivilegesRequired=admin` + 装到 `{autopf}`（Program Files），
-> 安装需要管理员权限。若要免管理员按用户安装，改成
-> `PrivilegesRequired=lowest` + `DefaultDirName={localappdata}\Atlas`。
+- `requirements.txt` contains broad minimum runtime requirements for a quick source install; it is not a reproducible lock.
+- Contributors and CI use `requirements.lock` plus `npm ci` to install the checked-in Python and npm dependency locks.
+- Portable releases use `packaging/requirements-release.lock`, a separate exact Windows packaging lock.

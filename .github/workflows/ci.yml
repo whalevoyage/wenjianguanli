@@ -19,6 +19,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -32,19 +35,27 @@ jobs:
   backend:
     name: Backend · lint / tests / safety
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
 
     env:
-      # 测试只写临时目录，绝不碰仓库里的 .filepilot
-      FILEPILOT_DATA_DIR: ${{ runner.temp }}/atlas-ci-data
       PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
+
+      - name: 准备隔离数据目录
+        run: |
+          echo "FILEPILOT_DATA_DIR=$RUNNER_TEMP/atlas-ci-data" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/atlas-ci-data"
 
       - name: 安装依赖（走依赖锁）
         run: |
@@ -54,16 +65,13 @@ jobs:
           # 锁文件里已经包含 pytest / httpx / ruff，不需要另装。
           pip install -r requirements.lock
 
-      - name: 准备数据目录
-        run: mkdir -p "$FILEPILOT_DATA_DIR"
-
       # ---- 第一道：静态检查 ----
       - name: Ruff
-        run: ruff check backend/ tests/ --output-format concise
+        run: ruff check backend/ tests/ packaging/ main.py --output-format concise
 
       # ---- 第二道：全量单元测试 ----
       # 不要加 -q：pyproject 的 addopts 已经是 -q，再加一个会变成 -qq，
-      # 汇总行（"317 passed"）会被吞掉，日志里就看不出结论了。
+      # Pytest 汇总行会被吞掉，日志里就看不出结论了。
       - name: Pytest（全量）
         run: python -m pytest
 
@@ -77,8 +85,10 @@ jobs:
             tests/test_execution_guard.py \
             tests/test_destructive_semantics.py \
             tests/test_secrets.py \
+            tests/test_providers.py \
             tests/test_mcp_security.py \
-            tests/test_fs_security.py
+            tests/test_fs_security.py \
+            tests/test_tool_registry.py
 
   frontend:
     name: Frontend · build

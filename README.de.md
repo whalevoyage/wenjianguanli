@@ -14,9 +14,9 @@
 
 Ein Werkzeug für Datenträgerbereinigung und Dateiverwaltung unter Windows: Scan-Analyse, Duplikat-Erkennung, Aufräumen von Junk-Dateien, Verschieben zwischen Laufwerken, Speicherkarte.
 
-Jeder Schritt **zeigt zuerst die Dateiliste und wartet auf Ihre Bestätigung**. Gelöschte Dateien landen zuerst in der Quarantäne und lassen sich später zurückholen.
+Schreibvorgänge zeigen zuerst die betroffene Dateiliste und warten auf Ihre Bestätigung. Standardmäßig verschiebt die Bereinigung Dateien in die Quarantäne, von wo sie wiederhergestellt werden können. Nicht umkehrbare Aktionen werden gekennzeichnet und erfordern eine zusätzliche Bestätigung.
 Die KI versteht Ihre Anweisung und erstellt einen Plan — die Dateien bewegt ausschließlich lokaler Code.
-Außer dem Agent-Q&A läuft alles lokal, funktioniert offline und braucht kein Konto.
+Abgesehen von Agent-Modellanfragen und ausdrücklich angeforderten KI-Erklärungen laufen Scan, Duplikaterkennung, Bereinigung, Migration und Sicherung lokal. Ein Konto ist nicht erforderlich.
 
 > Es entscheidet nicht für Sie. Es legt offen, welche Dateien eine Aktion berührt.
 
@@ -59,7 +59,7 @@ Deinstallieren heißt: diesen Ordner löschen.
 - Verschieben kopiert zuerst und prüft; die Quelle wird erst nach bestandener Prüfung angefasst.
 - Lange Operationen laufen als Hintergrundaufgaben mit Fortschritt, Abbruch und Rollback.
 - Projektordner, Statusordner und Quarantäne sind geschützt.
-- In Systemordner (Windows, Program Files, ProgramData) wird nie geschrieben.
+- Systemordner werden standardmäßig nicht gescannt. Im Standardmodus sind Schreibvorgänge dort gesperrt; im Modus „Vollzugriff“ kann dieser Schutz ausdrücklich gelockert werden. Atlas-eigene Daten und die Quarantäne bleiben geschützt.
 - `node_modules`, `.git`, `__pycache__`, `.venv`, `dist`, `build` u. a. sind standardmäßig ausgeschlossen.
 - Vor Verschieben und Backup wird der freie Platz am Ziel geprüft.
 - Lauscht nur auf `127.0.0.1`, nicht im LAN erreichbar.

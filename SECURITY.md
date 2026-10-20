@@ -16,6 +16,7 @@ Atlas 是一个**能真的删你文件**的本地工具，所以它的安全边�
 | 网络 | 只监听 `127.0.0.1` | 没有对外端口，没有账号体系 |
 | 权限档 | `readonly` / `standard` / `full` | 门禁在**服务层**，不是只写在路由上；只读档下任何写操作都拒 |
 | 写路径 | 全部经过 `backend/execution.py` | 检查顺序固定：权限档 → 目标写保护 → 链接/junction 逃逸 → 目录越界 |
+| Provider 密钥 | 只读取当前 Provider 的密钥来源 | `DEEPSEEK_API_KEY`、`OPENAI_API_KEY` 和 `FILEPILOT_LLM_API_KEY` 不会互相回退；切换 Provider 会清除已保存的旧 key |
 | 保护目录 | 自保护 + 软保护 + 系统只读区 | 自保护（工具自身数据/隔离区）任何档位不可写；桌面在 standard 下不可写 |
 | 删除 | 默认进隔离区 | 唯一物理删除口是 `trash_purge`（清空隔离区），风险等级固定 `high` |
 | Agent | 模型只产计划 | 工具名不在册即丢弃；写动作前**本地强制**插确认步骤，模型绕不过 |
