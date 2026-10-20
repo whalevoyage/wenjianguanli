@@ -363,3 +363,4 @@ powershell -ExecutionPolicy Bypass -File .\packaging\build_release.ps1
 
 > 安全边界与漏洞报告方式见 [`SECURITY.md`](SECURITY.md) 与 [`docs/MCP_SECURITY.md`](docs/MCP_SECURITY.md)。
 > 当前已知限制见 [`docs/LIMITS.md`](docs/LIMITS.md)。
+> 想参与改进（或先看看这套代码的规矩）见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
