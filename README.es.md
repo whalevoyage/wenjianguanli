@@ -24,7 +24,7 @@ Salvo las preguntas al Agente, todo funciona en local, sin conexión y sin cuent
 
 ## Inicio rápido
 
-1. Descarga `Atlas-2.1.0-win64-portable.zip` y descomprímelo donde quieras (por ejemplo `D:\Atlas`)
+1. Descarga [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) y descomprímelo donde quieras (por ejemplo `D:\Atlas`)
 2. Haz doble clic en `Atlas\Atlas.exe`
 3. El navegador se abre solo. No aparece ninguna ventana de consola.
 

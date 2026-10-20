@@ -26,7 +26,7 @@ AI 只负责听懂你说的话、生成计划 —— 真正碰文件的是本地
 
 ### 普通用户：解压即用（推荐）
 
-1. 下载 `Atlas-2.1.0-win64-portable.zip` 并解压到任意位置（比如 `D:\Atlas`）
+1. 下载 [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) 并解压到任意位置（比如 `D:\Atlas`）
 2. 双击 `Atlas\Atlas.exe`
 3. 程序**自动打开浏览器**进入界面。不会弹控制台窗口。
 

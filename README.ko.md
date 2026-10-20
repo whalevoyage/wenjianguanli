@@ -24,7 +24,7 @@ Agent Q&A를 제외하면 모두 로컬에서 동작하며, 오프라인에서�
 
 ## 시작하기
 
-1. `Atlas-2.1.0-win64-portable.zip`을 내려받아 원하는 위치에 압축을 풉니다 (예: `D:\Atlas`)
+1. [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest)을 내려받아 원하는 위치에 압축을 풉니다 (예: `D:\Atlas`)
 2. `Atlas\Atlas.exe`를 더블클릭합니다
 3. 브라우저가 자동으로 열립니다. 콘솔 창은 나타나지 않습니다.
 

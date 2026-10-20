@@ -26,7 +26,7 @@ Apart from Agent Q&A, everything runs locally, works offline, and needs no accou
 
 ### For users: unzip and run (recommended)
 
-1. Download `Atlas-2.1.0-win64-portable.zip` and extract it anywhere (e.g. `D:\Atlas`)
+1. Download [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) and extract it anywhere (e.g. `D:\Atlas`)
 2. Double-click `Atlas\Atlas.exe`
 3. The app **opens your browser** automatically. No console window appears.
 

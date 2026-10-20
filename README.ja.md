@@ -24,7 +24,7 @@ Agent の Q&A を除き、すべてローカルで動作し、オフラインで
 
 ## はじめに
 
-1. `Atlas-2.1.0-win64-portable.zip` をダウンロードし、任意の場所に展開します（例：`D:\Atlas`）
+1. [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) をダウンロードし、任意の場所に展開します（例：`D:\Atlas`）
 2. `Atlas\Atlas.exe` をダブルクリックします
 3. ブラウザが自動で開きます。コンソールウィンドウは表示されません。
 

@@ -24,7 +24,7 @@ Außer dem Agent-Q&A läuft alles lokal, funktioniert offline und braucht kein K
 
 ## Schnellstart
 
-1. `Atlas-2.1.0-win64-portable.zip` herunterladen und an einen beliebigen Ort entpacken (z. B. `D:\Atlas`)
+1. [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) herunterladen und an einen beliebigen Ort entpacken (z. B. `D:\Atlas`)
 2. `Atlas\Atlas.exe` doppelklicken
 3. Der Browser öffnet sich automatisch. Es erscheint kein Konsolenfenster.
 
