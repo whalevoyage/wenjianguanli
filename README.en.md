@@ -1,6 +1,14 @@
 # Atlas
 
-[中文](README.md) | **English**
+<p align="center">
+  <a href="README.md">简体中文</a> ·
+  <b>English</b> ·
+  <a href="README.ja.md">日本語</a> ·
+  <a href="README.ko.md">한국어</a> ·
+  <a href="README.de.md">Deutsch</a> ·
+  <a href="README.ru.md">Русский</a> ·
+  <a href="README.es.md">Español</a>
+</p>
 
 **Your C: drive is full. Look before you act.**
 
