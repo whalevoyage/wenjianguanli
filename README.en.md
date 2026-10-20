@@ -38,6 +38,14 @@ Python, Node and other runtimes are not required. The app only listens on `127.0
 
 If something goes wrong: **startup failure / blank page** → `%LOCALAPPDATA%\Atlas\atlas.log`; **a job returned wrong results** → the "Logs" page in the app.
 
+**Verify the hash after downloading** (to rule out a corrupted transfer):
+
+```powershell
+Get-FileHash .\Atlas-2.1.0-win64-portable.zip -Algorithm SHA256
+```
+
+The full SHA256 for 2.1.0 is in the `.sha256` file attached to the release. It changes with each release — always defer to the release page.
+
 ### For users: installer
 
 `packaging/Atlas.iss` is an Inno Setup script. It installs per-user into `%LOCALAPPDATA%\Atlas`

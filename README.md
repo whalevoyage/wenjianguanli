@@ -38,6 +38,14 @@ AI 只负责听懂你说的话、生成计划 —— 真正碰文件的是本地
 
 出问题了看两处：**启动失败/白屏**看 `%LOCALAPPDATA%\Atlas\atlas.log`；**某个任务结果不对**看界面里的「日志」页。
 
+**建议下载后核对哈希**（防传输损坏）：
+
+```powershell
+Get-FileHash .\Atlas-2.1.0-win64-portable.zip -Algorithm SHA256
+```
+
+2.1.0 的 SHA256 完整值见 Release 附件里的 `.sha256` 文件。版本升级后这个值会变，以 Release 页面为准。
+
 ### 普通用户：安装包
 
 `packaging/Atlas.iss` 是 Inno Setup 脚本，按用户安装到 `%LOCALAPPDATA%\Atlas`，
