@@ -26,7 +26,7 @@ Except for Agent model requests and AI explanations you explicitly request, scan
 
 ### For users: unzip and run (recommended)
 
-1. Download [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) and extract it anywhere (e.g. `D:\Atlas`)
+1. Download [Atlas-2.1.1-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) and extract it anywhere (e.g. `D:\Atlas`)
 2. Double-click `Atlas\Atlas.exe`
 3. The app **opens your browser** automatically. No console window appears.
 
@@ -41,7 +41,7 @@ If something goes wrong: **startup failure / blank page** → `%LOCALAPPDATA%\At
 **Verify the hash after downloading** (to rule out a corrupted transfer):
 
 ```powershell
-Get-FileHash .\Atlas-2.1.0-win64-portable.zip -Algorithm SHA256
+Get-FileHash .\Atlas-2.1.1-win64-portable.zip -Algorithm SHA256
 ```
 
 Download the `.sha256` sidecar with the same filename as the ZIP and compare it with your local `Get-FileHash` output. If the release has no matching sidecar, its checksum file has not been published; do not reuse a hash from another build or version.

@@ -38,8 +38,8 @@ The release build invokes this automatically. To run it against an existing arch
 
 ```powershell
 & .\packaging\smoke_release.ps1 `
-  -ArchivePath .\release\Atlas-2.1.0-win64-portable.zip `
-  -ExpectedVersion 2.1.0
+  -ArchivePath .\release\Atlas-2.1.1-win64-portable.zip `
+  -ExpectedVersion 2.1.1
 ```
 
 ## Optional installer

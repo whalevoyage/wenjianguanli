@@ -26,7 +26,7 @@ AI 只负责听懂你说的话、生成计划 —— 真正碰文件的是本地
 
 ### 普通用户：解压即用（推荐）
 
-1. 下载 [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) 并解压到任意位置（比如 `D:\Atlas`）
+1. 下载 [Atlas-2.1.1-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) 并解压到任意位置（比如 `D:\Atlas`）
 2. 双击 `Atlas\Atlas.exe`
 3. 程序**自动打开浏览器**进入界面。不会弹控制台窗口。
 
@@ -41,7 +41,7 @@ AI 只负责听懂你说的话、生成计划 —— 真正碰文件的是本地
 **建议下载后核对哈希**（防传输损坏）：
 
 ```powershell
-Get-FileHash .\Atlas-2.1.0-win64-portable.zip -Algorithm SHA256
+Get-FileHash .\Atlas-2.1.1-win64-portable.zip -Algorithm SHA256
 ```
 
 请下载与 ZIP 同名的 `.sha256` sidecar 并与本地 `Get-FileHash` 结果比对。若 Release 页面没有对应 sidecar，表示该版本的校验文件尚未发布；不要沿用其他构建或版本的哈希。

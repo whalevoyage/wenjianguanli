@@ -1,6 +1,6 @@
 [project]
 name = "atlas-filepilot"
-version = "2.1.0"
+version = "2.1.1"
 description = "本地优先、安全可控的 Windows 文件管理与磁盘整理工具，提供预览确认、可追溯操作、受支持的回滚和 AI Agent"
 requires-python = ">=3.11"
 license = "MIT"

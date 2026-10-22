@@ -24,7 +24,7 @@
 
 ## Быстрый старт
 
-1. Скачайте [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) и распакуйте в любое место (например, `D:\Atlas`)
+1. Скачайте [Atlas-2.1.1-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) и распакуйте в любое место (например, `D:\Atlas`)
 2. Дважды щёлкните `Atlas\Atlas.exe`
 3. Браузер откроется автоматически. Окно консоли не появляется.
 
