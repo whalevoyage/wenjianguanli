@@ -99,7 +99,7 @@ def test_write_action_has_a_locally_computed_risk(name):
 
 
 def test_trash_purge_is_always_high_risk():
-    """全项目唯一的物理删除口，永远最高风险、文案必须说「不可恢复」。"""
+    """显式清空隔离区的动作永远是最高风险，文案必须说「不可恢复」。"""
     level, reason = compute_risk("trash_purge", {}, {}, {"file_count": 3})
     assert level == "high"
     assert "不可恢复" in reason

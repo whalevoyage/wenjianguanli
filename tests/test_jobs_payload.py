@@ -10,6 +10,7 @@ from backend import database, jobs
 
 def test_persisted_job_drops_dir_sizes_but_keeps_the_rest(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs.config, "DATABASE_FILE", tmp_path / "filepilot.db")
+    monkeypatch.setattr(jobs.config, "JOBS_FILE", tmp_path / "jobs.json")
     manager = jobs.JobManager()
     job = manager.create("scan", "扫描 D:\\", "D:\\", {})
     # 真实流程里 result 是和终态一起写进去的（只有 status/actions/plan 会触发落库）
@@ -31,6 +32,7 @@ def test_persisted_job_drops_dir_sizes_but_keeps_the_rest(tmp_path, monkeypatch)
 def test_load_trims_existing_bloat_without_dropping_the_job(tmp_path, monkeypatch):
     """老库里已经躺着的巨型记录，读入时也要裁（自愈，但不删任务）。"""
     monkeypatch.setattr(jobs.config, "DATABASE_FILE", tmp_path / "filepilot.db")
+    monkeypatch.setattr(jobs.config, "JOBS_FILE", tmp_path / "jobs.json")
     database.replace_jobs(jobs.config.DATABASE_FILE, [{
         "id": "bloated",
         "type": "scan",

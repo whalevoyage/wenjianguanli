@@ -191,7 +191,7 @@ async function cleanup() {
   }
   const job = await clean.run(() => startClean({ items, mode: 'isolate' }))
   if (job) {
-    ElMessage.success(`已把 ${items.length} 个副本送进隔离区，可随时还原`)
+    ElMessage.success(`已把 ${items.length} 个副本送进隔离区，可尝试从隔离区还原`)
     selected.value = new Set()
   }
 }
@@ -351,7 +351,7 @@ onMounted(async () => {
       <section v-if="selected.size" class="app-card panel-card sticky-bar">
         <div>
           <strong>已选 {{ selectionStats.count }} 个副本</strong>
-          <span class="muted">预计释放 {{ selectionStats.size_text }}，移动后仍可从回收站还原</span>
+          <span class="muted">预计释放 {{ selectionStats.size_text }}，移动后可尝试从隔离区还原</span>
         </div>
         <el-button type="primary" :icon="Delete" :loading="clean.running.value" @click="cleanup">
           送进隔离区
@@ -425,7 +425,7 @@ onMounted(async () => {
       <section v-if="simSelected.size" class="app-card panel-card sticky-bar">
         <div class="sticky-bar__info">
           <strong>已选 {{ simStats.count }} 张</strong>
-          <span class="muted">预计释放 {{ simStats.size_text }}，可随时还原</span>
+          <span class="muted">预计释放 {{ simStats.size_text }}；手动清理后可尝试从隔离区还原</span>
           <el-segmented v-model="simCleanMode" :options="simModeOptions" size="small" />
         </div>
         <el-button type="primary" :icon="Delete" :loading="simClean.running.value" @click="runSimClean">

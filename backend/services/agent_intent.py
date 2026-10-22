@@ -544,7 +544,7 @@ def compute_risk(action: str, params: dict, constraints: dict, estimate: dict | 
     if action == "virtual_organize":
         return "low", "只把文件移动到分组子目录，不删除任何东西；任务页可整体回滚"
 
-    # 2026-10-13「能力放开」：隔离区彻底删除 = 全项目唯一的物理删除口，**不可回滚**
+    # 显式清空已有隔离区条目的动作：**不可回滚**。Agent 清理另有确认后清空新隔离条目的流程。
     if action == "trash_purge":
         count = int((estimate or {}).get("file_count") or 0)
         return "high", (f"将物理删除隔离区 {count} 项，**不可恢复**（隔离区是最后一道缓冲，删了就没了）"

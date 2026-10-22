@@ -19,7 +19,7 @@ const emit = defineEmits(['cancel', 'rollback'])
 async function requestCancel() {
   try {
     await ElMessageBox.confirm(
-      '任务会停在半途。已处理的内容按各自策略保留；删除项仍在隔离区，可回滚。',
+      '任务会停在半途。已处理的内容按各自策略保留；是否可回滚取决于操作类型和当前文件状态。',
       '中断这个任务？',
       {
         type: 'warning',

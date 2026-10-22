@@ -1909,7 +1909,7 @@ onBeforeUnmount(() => {
               方案已生成。清理类确认后即彻底删除，不可恢复——你确认前什么都不会动。
             </template>
             <template v-else>
-              方案已生成。删除一律先进隔离区，可随时还原——你确认前什么都不会动。
+              方案已生成。可撤销性取决于操作类型和文件状态；永久清理会在方案中标明不可恢复——你确认前什么都不会动。
             </template>
           </p>
         </div>
@@ -1935,7 +1935,7 @@ onBeforeUnmount(() => {
           </ul>
           <p class="write-confirm__note">
             {{ writeConfirm.destructive
-              ? '所有删除项先进隔离区，可随时还原；谨慎级垃圾不会被碰。'
+              ? '清理项会先进入隔离区；原路径未被占用且文件系统允许时可尝试还原。谨慎级垃圾不会被碰。'
               : '复制校验通过后才删源；系统只读区与自保护目录不会触碰。' }}
           </p>
           <div class="write-confirm__actions">

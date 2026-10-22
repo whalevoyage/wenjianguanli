@@ -48,7 +48,7 @@
 | Provider | 支持 DeepSeek、OpenAI 和自定义 OpenAI 兼容 endpoint。已保存的当前 Provider Key 优先；环境变量只读取对应服务商的变量，不跨服务商回退。 |
 | 联网点 | 需要模型的 Agent 请求，以及用户主动点击的 AI 清理解释会连接模型服务。常见文件意图可由本地规则处理。 |
 | 模型数据 | 模型请求可能包含消息、必要路径、工具 schema、结果摘要；用户要求全文检索时还可能包含命中正文片段。Atlas 不把文件二进制作为请求内容发送。 |
-| Agent 工具 | 共 48 个：26 个执行动作、16 个只读查询、6 个导航辅助。定义集中在 `backend/services/tool_specs.py`；`tests/test_tool_registry.py` 会防止注册项与实际工具漂移。 |
+| Agent 工具 | 工具及类别集中注册在 `backend/services/tool_specs.py`；`tests/test_tool_registry.py` 会检查注册项与实现是否一致。 |
 | 写操作确认 | 写操作需要本地风险判断和用户确认。不可逆的隔离区清空/Agent 清理有单独的风险标记和确认流程。 |
 | CLI | `python -m backend.cli` 提供只读扫描与分析命令，没有删除或移动命令。 |
 | MCP | `Atlas.exe --mcp --allow <目录>` 提供只读工具和路径白名单；白名单为空时拒绝访问。安全例外见 [MCP_SECURITY.md](MCP_SECURITY.md)。 |
@@ -56,7 +56,7 @@
 
 ## 自动化检查
 
-CI 使用 Windows runner，后端测试 Python 3.11/3.12，Ruff 覆盖 `backend/`、`tests/`、`packaging/` 和 `main.py`，另有安全子集与前端生产构建。GitHub Actions 状态以仓库最新 run 为准；本地通过不代表远端 run 已成功。
+CI 使用 Windows runner，后端检查覆盖 Python 3.11/3.12，并运行 Ruff（含 `atlas_app/` launcher）、全量测试、安全子集、锁定依赖的 `pip check`、安装后 CLI 入口检查和前端生产构建。独立工作流按计划审计 Python/npm 依赖并扫描 secrets；发布预检构建 Windows 便携包并运行打包 smoke，不创建 GitHub Release。GitHub Actions 状态以仓库最新 run 为准；本地通过不代表远端 run 已成功。
 
 端到端 `tests/smoke_test.py` 需要单独启动从仓库根目录运行的测试后端。它不是便携版 smoke：打包版的 UI/health 验证由 `packaging/smoke_release.ps1` 执行，两者用途不同。
 

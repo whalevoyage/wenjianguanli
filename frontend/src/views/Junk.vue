@@ -69,7 +69,7 @@ async function askExplain(item) {
 const result = ref(null)
 
 const modeOptions = [
-  { label: '送进隔离区（可还原）', value: 'isolate' },
+  { label: '送进隔离区（可尝试还原）', value: 'isolate' },
   { label: '送进系统回收站', value: 'recycle' },
 ]
 

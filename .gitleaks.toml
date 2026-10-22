@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deterministic synthetic key used only by the key-masking unit test."
+condition = "AND"
+paths = ['''^tests/test_secrets\.py$''']
+regexes = ['''sk-live-1234567890abcdef''']

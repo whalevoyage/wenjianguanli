@@ -52,7 +52,7 @@ TRASH_MANIFEST = STATE_DIR / "trash.json"
 SNAPSHOT_FILE = STATE_DIR / "snapshots.json"
 DATABASE_FILE = STATE_DIR / "filepilot.db"
 
-# 隔离区：所有"删除"默认先落到这里，而不是物理删除。
+# 隔离区：普通手动清理默认先把文件暂存于此；永久清理会走单独的确认流程。
 # 实际使用时优先落到「源文件所在盘」的同盘隔离区，避免跨盘移动（慢且易失败），
 # 这里的 TRASH_DIR 只作为兜底位置。
 TRASH_DIR = Path(os.getenv("FILEPILOT_TRASH") or (_safe_home() / "FilePilotTrash"))
@@ -188,7 +188,7 @@ SELF_PROTECTED_DIRS: list[Path] = [
 SAFETY_BLOCKLIST: list[Path] = SOFT_PROTECTED_DIRS + SELF_PROTECTED_DIRS
 
 # 权限档位：readonly / standard / full
-# 「完全访问」仍受三条底限约束：删除必进隔离区、自保护目录不写、切换需显式确认
+# 「完全访问」仍受底限约束：手动普通清理默认隔离、自保护目录不写、切换需显式确认
 PERMISSION_MODES: list[dict] = [
     {
         "id": "readonly",
@@ -206,7 +206,7 @@ PERMISSION_MODES: list[dict] = [
         "id": "full",
         "label": "完全访问",
         "tone": "warning",
-        "desc": "允许改动桌面与系统目录；删除仍先进隔离区，自保护目录仍不可写",
+        "desc": "允许改动桌面与系统目录；手动普通清理默认进隔离区，自保护目录仍不可写",
     },
 ]
 

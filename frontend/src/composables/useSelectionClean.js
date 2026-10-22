@@ -7,8 +7,8 @@ import { useJob } from './useJob'
  * 结果页通用：「勾选 → 送进隔离区 / 送进系统回收站」。
  *
  * ★ 复用既有的 `POST /api/clean`，**不新增"直接删文件"的接口** ——
- *   两种动作都可还原（隔离区 / Windows 回收站），与全站「删除先进隔离区」的承诺一致；
- *   真正的物理删除仍只在回收站页的「彻底删除」。
+ *   手动清理先进入隔离区或 Windows 回收站；能否还原取决于原路径和当前回收站状态。
+ *   Agent 永久清理和隔离区清空是另行确认的不可恢复操作。
  *
  * 用法：`const sel = useSelectionClean('scan.clean')`，
  * 然后 `v-model` 到 `sel.selected`（一个 path 的 Set）、`sel.cleanMode`，
@@ -16,7 +16,7 @@ import { useJob } from './useJob'
  */
 
 export const CLEAN_MODE_OPTIONS = [
-  { label: '送进隔离区（可还原）', value: 'isolate' },
+  { label: '送进隔离区（可尝试还原）', value: 'isolate' },
   { label: '送进系统回收站', value: 'recycle' },
 ]
 
@@ -46,7 +46,7 @@ export function useSelectionClean(jobKey) {
     const job = await clean.run(() => startClean({ items, mode: cleanMode.value }))
     if (job) {
       const where = cleanMode.value === 'recycle' ? '系统回收站' : '隔离区'
-      ElMessage.success(`已把 ${items.length} 项送进${where}，可随时还原`)
+      ElMessage.success(`已把 ${items.length} 项送进${where}，可从相应位置尝试还原`)
       clear()
     }
     return job

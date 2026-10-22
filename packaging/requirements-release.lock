@@ -1,38 +1,91 @@
-# Windows portable release build lock.
-# Versions were captured from the existing Windows packaging environment that
-# produced the currently published Atlas 2.1.0 artifact (CPython 3.12).
-# Keep every direct and transitive build/runtime dependency exact.
+# Windows CPython 3.12 release dependency lock generated with pip-tools 7.5.0.
+# Direct and transitive runtime, desktop, image and PyInstaller dependencies are pinned.
+# Hashes are omitted; pip-tools hash generation timed out while fetching artifacts from
+# the package index. The release builder runs pip check after installation.
+# Regenerate with: pip-compile --resolver=backtracking --allow-unsafe -o packaging/requirements-release.lock packaging/requirements-release.in
 altgraph==0.17.5
+    # via pyinstaller
 annotated-doc==0.0.5
+    # via fastapi
 annotated-types==0.8.0
+    # via pydantic
 anyio==4.15.1
+    # via
+    #   starlette
+    #   watchfiles
 bottle==0.13.4
+    # via pywebview
 cffi==2.1.1
+    # via clr-loader
 click==8.5.0
-clr_loader==0.3.1
+    # via uvicorn
+clr-loader==0.3.1
+    # via pythonnet
 fastapi==0.142.2
+    # via -r packaging/requirements-release.in
 h11==0.16.0
+    # via uvicorn
 httptools==0.8.0
+    # via uvicorn
 idna==3.20
+    # via anyio
 opentelemetry-api==1.45.0
+    # via fastapi
 packaging==26.3
+    # via
+    #   pyinstaller
+    #   pyinstaller-hooks-contrib
 pefile==2024.8.26
-pillow==12.3.0
-pydantic==2.13.5
-pydantic_core==2.46.5
-proxy_tools==0.1.0
+    # via pyinstaller
+pillow==13.0.0
+    # via -r packaging/requirements-release.in
+proxy-tools==0.1.0
+    # via pywebview
 pycparser==3.0
+    # via cffi
+pydantic==2.13.5
+    # via fastapi
+pydantic-core==2.46.5
+    # via pydantic
 pyinstaller==6.22.3
+    # via -r packaging/requirements-release.in
 pyinstaller-hooks-contrib==2026.8
+    # via pyinstaller
 python-dotenv==1.2.4
+    # via uvicorn
 pythonnet==3.2.0
+    # via pywebview
 pywebview==6.2.1
+    # via -r packaging/requirements-release.in
 pywin32-ctypes==0.2.3
-PyYAML==6.0.3
-setuptools==84.0.0
+    # via pyinstaller
+pyyaml==6.0.3
+    # via uvicorn
 starlette==1.7.0
+    # via fastapi
+typing-extensions==4.16.0
+    # via
+    #   anyio
+    #   fastapi
+    #   opentelemetry-api
+    #   pydantic
+    #   pydantic-core
+    #   pywebview
+    #   starlette
+    #   typing-inspection
 typing-inspection==0.4.4
-typing_extensions==4.16.0
-uvicorn==0.54.0
+    # via
+    #   fastapi
+    #   pydantic
+uvicorn[standard]==0.54.0
+    # via -r packaging/requirements-release.in
 watchfiles==1.3.0
+    # via uvicorn
 websockets==17.2
+    # via uvicorn
+
+# The following packages are considered to be unsafe in a requirements file:
+setuptools==84.0.0
+    # via
+    #   -r packaging/requirements-release.in
+    #   pyinstaller

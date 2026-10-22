@@ -1,0 +1,84 @@
+name: Release Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-check-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Windows portable release preflight
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install locked Python dependencies
+        run: python -m pip install -r requirements.lock
+
+      - name: Validate Python dependency graph
+        run: python -m pip check
+
+      - name: Ruff
+        run: python -m ruff check backend/ atlas_app/ tests/ packaging/ main.py
+
+      - name: Python tests
+        run: python -m pytest
+
+      - name: Safety tests
+        run: >-
+          python -m pytest
+          tests/test_agent_safety.py
+          tests/test_execution_guard.py
+          tests/test_destructive_semantics.py
+          tests/test_secrets.py
+          tests/test_providers.py
+          tests/test_mcp_security.py
+          tests/test_fs_security.py
+          tests/test_tool_registry.py
+
+      - name: Version consistency
+        run: python -m pytest tests/test_version_consistency.py
+
+      - name: Installed entrypoint sanity
+        run: |
+          python -m pip install --no-build-isolation --no-deps -e .
+          python -m pip check
+          atlas --version
+          atlas-cli --help
+          atlas-mcp --help
+
+      - name: Frontend production build
+        working-directory: frontend
+        run: |
+          npm ci
+          npm ls --all
+          npm run build
+
+      - name: Build portable ZIP, verify SHA256 and run packaged smoke
+        shell: pwsh
+        run: .\packaging\build_release.ps1
+
+      - name: Upload portable release candidate artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-portable-release-candidate
+          path: |
+            release/Atlas-*-win64-portable.zip
+            release/Atlas-*-win64-portable.zip.sha256
+          if-no-files-found: error
+          retention-days: 14

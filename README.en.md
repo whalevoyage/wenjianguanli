@@ -10,11 +10,11 @@
   <a href="README.es.md">Español</a>
 </p>
 
-**Your C: drive is full. Look before you act.**
+**Local-first Windows file management and disk cleanup with preview-first operations, explicit confirmation, auditability, reversible workflows where supported, and an AI Agent.**
 
-Disk cleanup and file management for Windows: scan analysis, duplicate detection, junk cleanup, cross-drive migration, space map.
+Scan analysis, duplicate detection, junk cleanup, cross-drive migration and a space map help you see what will change before acting.
 
-File write operations show you the proposed file list and wait for confirmation. By default, cleanup moves files to quarantine where they can be restored; irreversible actions are labeled and require additional confirmation.
+File write operations show you the proposed file list and wait for confirmation. Manual cleanup defaults to quarantine and can be restored when the original path and filesystem state allow it. Agent permanent cleanup and trash purge cannot be restored; they are labeled and require additional confirmation.
 The AI only understands what you say and drafts a plan — the code that actually touches your files is local.
 Except for Agent model requests and AI explanations you explicitly request, scanning, duplicate detection, cleanup, migration and backup run locally. No account is required.
 

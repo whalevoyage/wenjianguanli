@@ -155,9 +155,7 @@ def update_settings(
     if llm_base_url is not None:
         value = llm_base_url.strip().rstrip("/")
         if value:
-            if not value.startswith(("http://", "https://")):
-                raise ValueError("接口地址必须以 http:// 或 https:// 开头")
-            agent_settings["llm_base_url"] = value
+            agent_settings["llm_base_url"] = providers.validate_base_url(value)
         else:
             agent_settings.pop("llm_base_url", None)
 

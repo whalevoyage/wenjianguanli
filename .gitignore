@@ -4,6 +4,8 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .venv/
+.venv-entry-test/
+*.egg-info/
 venv/
 env/
 

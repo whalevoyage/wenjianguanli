@@ -83,8 +83,8 @@ SYSTEM_PROMPT = """你是 Atlas 通用助手，优先帮助用户完成文件管
 - duplicate_scan  查找内容重复的文件
 - junk_scan       查找垃圾文件（临时文件/缓存/日志/空目录等）
 - migrate_plan    规划把文件从 A 目录迁移到 B 目录（只出清单，不动文件）
-- duplicate_clean 清理重复文件（只删每组多余副本，进隔离区）
-- junk_clean      清理垃圾文件（只清安全级，进隔离区）
+- duplicate_clean 清理重复文件（只删每组多余副本；确认后永久删除）
+- junk_clean      清理垃圾文件（只清安全级；确认后永久删除）
 - migrate_execute 真正执行搬移（复制+校验+删源）
 - backup          把目录备份成压缩包
 - trash_restore   把隔离区里的文件恢复回原位置
@@ -95,7 +95,7 @@ SYSTEM_PROMPT = """你是 Atlas 通用助手，优先帮助用户完成文件管
 - large_scan      查找大文件
 - large_clean     清理大文件（**确认后即永久删除、不可恢复**）
 - search_index    为目录建立全文检索索引
-- trash_purge     彻底删除隔离区内容（**不可恢复**，全项目唯一的物理删除口）
+- trash_purge     彻底删除已在隔离区的内容（**不可恢复**；Agent 清理也会在单独确认后清空本批隔离项）
 
 输出格式严格为：
 {"goal": "一句话目标", "action": "junk_clean", "reason": "一句话说明",

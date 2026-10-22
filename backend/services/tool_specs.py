@@ -108,7 +108,7 @@ ACTION_SPECS: tuple[ToolSpec, ...] = (
              params=("path", "min_mb", "limit"), path_params=("path",)),
     ToolSpec("search_index", "建立全文索引", "job", "query",
              params=("paths",), path_params=("paths",)),
-    # 隔离区彻底删除：**全项目唯一的物理删除口**，最高风险
+    # 显式清空已有隔离区条目的动作：不可恢复，最高风险；Agent 清理另有确认后的批次清空流程。
     ToolSpec("trash_purge", "彻底删除隔离区内容", "job", "execute", access=WRITE,
              params=("ids", "all")),
     # 2026-10-14：整理真执行（就地移动到分组子目录，只移动不删除、可回滚）

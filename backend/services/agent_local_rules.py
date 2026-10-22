@@ -273,7 +273,7 @@ def parse_local(message: str, context: dict | None = None) -> dict | None:
             "needs_path": not first,
         }
 
-    # 隔离区彻底删除：全项目唯一的物理删除口，必须显式说出"彻底"
+    # 隔离区彻底删除：必须显式说出"彻底"；Agent 清理有单独的确认后永久删除流程。
     if re.search(r"(彻底删除|清空隔离区|清空回收站|物理删除)", text):
         return {
             "action": "trash_purge",
