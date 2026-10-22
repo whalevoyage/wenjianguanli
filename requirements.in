@@ -1,0 +1,9 @@
+# Direct inputs for CI and contributor installs: requirements.txt runtime inputs,
+# test/images packages, Ruff, and the editable build backend. CI verifies Python 3.11/3.12.
+fastapi
+uvicorn[standard]
+pytest
+httpx
+ruff
+pillow
+setuptools==84.0.0

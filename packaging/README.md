@@ -22,7 +22,7 @@ npm ci
 → extract ZIP and run packaged smoke checks
 ```
 
-The lock pins PyInstaller, Pillow, pywebview and their complete Python dependency set. It was captured from the Windows packaging environment used for the published 2.1.0 build. The script checks that `backend/config.py`, `pyproject.toml` and `Atlas.iss` use the same version before creating an artifact. The archive name comes from `pyproject.toml`.
+The release lock pins the full Windows CPython 3.12 runtime and packaging dependency graph, including PyInstaller, Pillow and pywebview. Regenerate it from `packaging/requirements-release.in` using the command documented below. The script checks that `backend/config.py`, `pyproject.toml` and `Atlas.iss` use the same version before creating an artifact. The archive name comes from `pyproject.toml`.
 
 Build outputs are written under ignored `dist/` and `release/` directories. The script replaces only its known generated outputs (`dist/Atlas`, `release/Atlas`, the versioned ZIP and sidecar, and `release/Atlas.iss`).
 
@@ -38,8 +38,8 @@ The release build invokes this automatically. To run it against an existing arch
 
 ```powershell
 & .\packaging\smoke_release.ps1 `
-  -ArchivePath .\release\Atlas-2.1.0-win64-portable.zip `
-  -ExpectedVersion 2.1.0
+  -ArchivePath .\release\Atlas-2.1.1-win64-portable.zip `
+  -ExpectedVersion 2.1.1
 ```
 
 ## Optional installer
@@ -55,5 +55,9 @@ The installer is per-user: it installs to `%LOCALAPPDATA%\Atlas` and uses `Privi
 ## Development and CI dependencies
 
 - `requirements.txt` contains broad minimum runtime requirements for a quick source install; it is not a reproducible lock.
-- Contributors and CI use `requirements.lock` plus `npm ci` to install the checked-in Python and npm dependency locks.
-- Portable releases use `packaging/requirements-release.lock`, a separate exact Windows packaging lock.
+- `requirements.lock` pins the complete transitive contributor/CI dependency graph; regenerate it from `requirements.in` with `pip-compile --resolver=backtracking --allow-unsafe -o requirements.lock requirements.in`. To refresh a specific package, add `--upgrade-package <name>`; CI and the scheduled audit catch newly published advisories.
+- Contributors and CI install `requirements.lock` plus the checked-in npm lock through `npm ci`; CI verifies the Python lock on Python 3.11 and 3.12.
+- Portable releases use `packaging/requirements-release.lock`, generated from `packaging/requirements-release.in` on Windows CPython 3.12 with `pip-compile --resolver=backtracking --allow-unsafe -o packaging/requirements-release.lock packaging/requirements-release.in`. Use `--upgrade-package <name>` when refreshing a package.
+- CI installs the project in editable mode and runs `atlas --version`, `atlas-cli --help` and `atlas-mcp --help`; the GUI entrypoint exits without starting a service for help/version requests.
+
+The importable launcher lives in `atlas_app/launcher.py`. `packaging/launcher.py` remains a compatibility wrapper for `python packaging\\launcher.py`, while the `packaging/` directory continues to hold release assets and scripts.

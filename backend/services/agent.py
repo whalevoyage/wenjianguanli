@@ -83,8 +83,8 @@ SYSTEM_PROMPT = """你是 Atlas 通用助手，优先帮助用户完成文件管
 - duplicate_scan  查找内容重复的文件
 - junk_scan       查找垃圾文件（临时文件/缓存/日志/空目录等）
 - migrate_plan    规划把文件从 A 目录迁移到 B 目录（只出清单，不动文件）
-- duplicate_clean 清理重复文件（只删每组多余副本，进隔离区）
-- junk_clean      清理垃圾文件（只清安全级，进隔离区）
+- duplicate_clean 清理重复文件（只删每组多余副本；确认后永久删除）
+- junk_clean      清理垃圾文件（只清安全级；确认后永久删除）
 - migrate_execute 真正执行搬移（复制+校验+删源）
 - backup          把目录备份成压缩包
 - trash_restore   把隔离区里的文件恢复回原位置
@@ -95,7 +95,7 @@ SYSTEM_PROMPT = """你是 Atlas 通用助手，优先帮助用户完成文件管
 - large_scan      查找大文件
 - large_clean     清理大文件（**确认后即永久删除、不可恢复**）
 - search_index    为目录建立全文检索索引
-- trash_purge     彻底删除隔离区内容（**不可恢复**，全项目唯一的物理删除口）
+- trash_purge     彻底删除已在隔离区的内容（**不可恢复**；Agent 清理也会在单独确认后清空本批隔离项）
 
 输出格式严格为：
 {"goal": "一句话目标", "action": "junk_clean", "reason": "一句话说明",
@@ -968,6 +968,15 @@ def _looks_like_action(text: str) -> bool:
     return bool(ACTION_HINT_RE.search(text or ""))
 
 
+def _asks_for_rule_explanation(text: str) -> bool:
+    """Match ordered question/rule words without a backtracking wildcard."""
+    for line in text.split("\n"):
+        question = re.search(r"为什么|为何|原因", line)
+        if question and any(word in line[question.end():] for word in ("垃圾", "清理", "判定", "规则")):
+            return True
+    return False
+
+
 def query_local(message: str, context: dict | None = None) -> dict | None:
     """零 token 回答状态、身份与解释类问题。
 
@@ -1012,7 +1021,7 @@ def query_local(message: str, context: dict | None = None) -> dict | None:
         return {"source": "local", "tokens": 0, "type": "status",
                 "message": f"当前有 {len(running)} 个任务在跑：" + "、".join(lines), "data": status}
 
-    if re.search(r"(为什么|为何|原因).*(垃圾|清理|判定|规则)", text):
+    if _asks_for_rule_explanation(text):
         paths = _extract_paths(text)
         return {
             "source": "local", "tokens": 0, "type": "explain",

@@ -78,6 +78,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not create a clean packaging virtual env
 if ($LASTEXITCODE -ne 0) { throw 'Could not install the pinned pip version.' }
 & $Python -m pip install --disable-pip-version-check --cache-dir $PipCache --requirement $Lock
 if ($LASTEXITCODE -ne 0) { throw 'Could not install the locked release dependencies.' }
+& $Python -m pip check
+if ($LASTEXITCODE -ne 0) { throw 'Locked release dependencies are inconsistent.' }
 
 # Replace only known generated outputs; preserve unrelated files under release/.
 Assert-GeneratedPathInsideRoot $Release
@@ -95,7 +97,7 @@ try {
     --specpath (Join-Path $Root 'build') `
     --icon (Join-Path $PSScriptRoot 'atlas.ico') `
     --hidden-import webview --hidden-import webview.platforms.edgechromium `
-    --paths $Root --collect-submodules backend --collect-data uvicorn --collect-data PIL packaging/launcher.py
+    --paths $Root --collect-submodules backend --collect-data uvicorn --collect-data PIL atlas_app/launcher.py
   if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed.' }
 } finally { Pop-Location }
 

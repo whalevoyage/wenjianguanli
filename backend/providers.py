@@ -25,7 +25,10 @@ DeepSeek，用的还是上一个服务商的 key。这类 bug 在测试里很难
 from __future__ import annotations
 
 import os
+import ipaddress
+import re
 from dataclasses import dataclass, replace
+from urllib.parse import urlsplit
 
 from . import secrets, store
 
@@ -78,6 +81,51 @@ BUILTIN: dict[str, Provider] = {
 LEGACY_PROVIDER_ID = "deepseek"
 
 
+REMOTE_HTTP_ERROR = "远程模型服务必须使用 HTTPS；HTTP 仅允许 localhost / loopback 本地服务。"
+
+
+def validate_base_url(value: str) -> str:
+    """Validate a custom OpenAI-compatible base URL before storing or using it."""
+    base = (value or "").strip().rstrip("/")
+    try:
+        parsed = urlsplit(base)
+        hostname = parsed.hostname
+        port = parsed.port  # Access validates malformed and out-of-range ports.
+    except ValueError as exc:
+        raise ValueError("接口地址不是有效的 HTTP(S) URL") from exc
+
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc or not hostname:
+        raise ValueError("接口地址必须是有效的 HTTPS URL；HTTP 仅允许 localhost / loopback 本地服务。")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("接口地址不能包含用户名或密码")
+    if port == 0:
+        raise ValueError("接口地址端口必须在 1 到 65535 之间")
+    if parsed.query or parsed.fragment:
+        raise ValueError("接口地址不能包含 query 或 fragment")
+
+    normalized_host = hostname.rstrip(".").lower()
+    try:
+        address = ipaddress.ip_address(normalized_host)
+        is_loopback = address.is_loopback
+    except ValueError:
+        is_loopback = normalized_host == "localhost"
+        try:
+            ascii_host = normalized_host.encode("idna").decode("ascii")
+        except UnicodeError as exc:
+            raise ValueError("接口地址主机名无效") from exc
+        if len(ascii_host) > 253 or any(
+            not label
+            or len(label) > 63
+            or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label)
+            for label in ascii_host.split(".")
+        ):
+            raise ValueError("接口地址主机名无效")
+
+    if parsed.scheme.lower() == "http" and not is_loopback:
+        raise ValueError(REMOTE_HTTP_ERROR)
+    return base
+
+
 def options() -> list[dict]:
     """给设置面板用的清单（不暴露 key_env 这类实现细节）。"""
     return [
@@ -111,8 +159,7 @@ def resolve() -> Provider:
     base = str(store.read_agent_settings().get("llm_base_url") or "").strip().rstrip("/")
     if not base:
         raise ValueError("自定义服务需要先填写接口地址（Base URL），否则不知道该往哪发")
-    if not base.startswith(("http://", "https://")):
-        raise ValueError("接口地址必须以 http:// 或 https:// 开头")
+    base = validate_base_url(base)
 
     # 自定义服务不知道默认模型，交给用户填的 model 或调用方兜底
     return replace(spec, base_url=base)

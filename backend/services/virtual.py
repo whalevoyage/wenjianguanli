@@ -368,7 +368,9 @@ def export_manifest(root: str, group_by: str, items: list[dict]) -> dict:
     if not items:
         raise ValueError("没有可导出的清单")
 
-    mode = MODE_BY_ID.get(group_by) or {"id": group_by or "unknown", "label": group_by or "未知"}
+    mode = MODE_BY_ID.get(group_by)
+    if mode is None:
+        raise ValueError(f"不支持的分组方式：{group_by}")
     limited = items[:config.VIRTUAL_EXPORT_LIMIT]
     truncated = len(items) > len(limited)
 

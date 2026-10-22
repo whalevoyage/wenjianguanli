@@ -1,7 +1,7 @@
 [project]
 name = "atlas-filepilot"
-version = "2.1.0"
-description = "Windows 本地文件管理台：扫描、查重、清理、迁移、备份与 Agent 助手；模型调用按需启用"
+version = "2.1.1"
+description = "本地优先、安全可控的 Windows 文件管理与磁盘整理工具，提供预览确认、可追溯操作、受支持的回滚和 AI Agent"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "王鑫焱 (wangxinyan)" }]
@@ -26,9 +26,18 @@ packaging = ["pyinstaller"]
 test = ["pytest", "httpx"]
 
 [project.scripts]
-atlas = "packaging.launcher:main"
+atlas = "atlas_app.launcher:main"
 atlas-mcp = "backend.mcp_server:serve_main"
 atlas-cli = "backend.cli:main"
+
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["atlas_app*", "backend*"]
+namespaces = false
 
 [tool.ruff]
 line-length = 120

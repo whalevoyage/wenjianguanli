@@ -40,6 +40,7 @@ Atlas does not send file binaries as part of these requests. Full-text search sn
 - A key entered in settings is protected with Windows DPAPI and is not returned in full by the settings API.
 - Environment variables are provider-specific: `DEEPSEEK_API_KEY`, `OPENAI_API_KEY` and `FILEPILOT_LLM_API_KEY`. A key for one provider is not used as a fallback for another provider.
 - When a model request is made, the configured provider receives its API key as authentication for that request. Do not use an endpoint you do not trust.
+- Custom remote endpoints must use HTTPS. Plain HTTP is accepted only for `localhost` and IP loopback addresses such as `127.0.0.1` and `::1`.
 - Each provider's retention and processing practices are governed by that provider's own policies, outside Atlas's control.
 
 ## Telemetry and updates

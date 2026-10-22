@@ -10,11 +10,11 @@
   <a href="README.es.md">Español</a>
 </p>
 
-**C 盘满了，先看清再动手。**
+**本地优先、安全可控的 Windows 文件管理与磁盘整理工具：预览优先、明确确认、可追溯；受支持的操作可回滚，并提供 AI Agent。**
 
-Windows 上的磁盘清理与文件管理工具：扫描分析、重复文件、垃圾清理、跨盘迁移、空间地图。
+扫描分析、重复文件、垃圾清理、跨盘迁移、空间地图，帮助你先看清再动手。
 
-文件写操作会先展示清单并等待确认。默认清理先进隔离区，可撤销；不可逆操作会明确标记并要求额外确认。
+文件写操作会先展示清单并等待确认。手动普通清理默认先进隔离区，在原路径和文件系统状态允许时可恢复；Agent 永久清理和清空隔离区不可恢复，会明确标记并要求额外确认。
 AI 只负责听懂你说的话、生成计划 —— 真正碰文件的是本地代码。
 除 Agent 模型请求和用户主动触发的 AI 解释外，扫描、查重、清理、迁移、备份等均在本地完成；无需账号。
 
@@ -26,7 +26,7 @@ AI 只负责听懂你说的话、生成计划 —— 真正碰文件的是本地
 
 ### 普通用户：解压即用（推荐）
 
-1. 下载 [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) 并解压到任意位置（比如 `D:\Atlas`）
+1. 下载 [Atlas-2.1.1-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) 并解压到任意位置（比如 `D:\Atlas`）
 2. 双击 `Atlas\Atlas.exe`
 3. 程序**自动打开浏览器**进入界面。不会弹控制台窗口。
 
@@ -41,7 +41,7 @@ AI 只负责听懂你说的话、生成计划 —— 真正碰文件的是本地
 **建议下载后核对哈希**（防传输损坏）：
 
 ```powershell
-Get-FileHash .\Atlas-2.1.0-win64-portable.zip -Algorithm SHA256
+Get-FileHash .\Atlas-2.1.1-win64-portable.zip -Algorithm SHA256
 ```
 
 请下载与 ZIP 同名的 `.sha256` sidecar 并与本地 `Get-FileHash` 结果比对。若 Release 页面没有对应 sidecar，表示该版本的校验文件尚未发布；不要沿用其他构建或版本的哈希。

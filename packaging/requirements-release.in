@@ -1,0 +1,8 @@
+# Windows CPython 3.12 portable release inputs. The output lock contains the
+# complete runtime, desktop, image and PyInstaller dependency graph.
+fastapi
+uvicorn[standard]
+pywebview
+pillow
+pyinstaller
+setuptools==84.0.0

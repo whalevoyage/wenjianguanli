@@ -26,6 +26,9 @@ Phase 5 需求列了 15 类攻击面。落点索引（已有覆盖的标出处�
 from __future__ import annotations
 
 import inspect
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,6 +37,25 @@ from backend import config, execution, fsutil, permissions
 from backend.services import agent, clean
 from backend.services.agent_intent import compute_risk
 from backend.services.agent_planner import normalize_steps
+
+
+def test_adversarial_agent_text_finishes_without_regex_backtracking(tmp_path):
+    script = "\n".join([
+        "from backend.services import agent, agent_intent, agent_local_rules",
+        "text = '腾' + ' ' * 50000 + 'X'",
+        "assert agent_intent.canonical(text) == text",
+        "assert not agent_intent.SPACE_INTENT_RE.search(text)",
+        "assert agent_local_rules._extract_filters('9' * 50000 + 'X') == {}",
+        "assert not agent._asks_for_rule_explanation('为何' * 10000 + 'X')",
+        "assert agent_local_rules._extract_filters('9' * 4000 + 'GB')['min_size_mb'] == 1000000",
+    ])
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "FILEPILOT_DATA_DIR": str(tmp_path / "data"), "PYTHONUTF8": "1"},
+        capture_output=True, text=True, encoding="utf-8", timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.fixture

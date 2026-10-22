@@ -116,7 +116,7 @@ STEP_LARGE: list[dict] = [
      "risk": "low", "input": "方案与风险等级", "output": "你的决定"},
 ]
 
-# 隔离区彻底删除：**唯一物理删除口**。先读隔离区内容（确认卡要逐条列），再等高风险确认。
+# 清空已有隔离区条目的专用流程：先逐条列出，再等待高风险确认。Agent 清理另有永久删除确认。
 STEP_PURGE: list[dict] = [
     {"id": "trash", "title": "读取隔离区内容", "kind": "query", "tool": "trash_contents",
      "risk": "low", "input": "隔离区", "output": "待彻底删除的条目与体积"},
@@ -352,7 +352,7 @@ EXECUTE_STEPS_MIGRATE: list[dict] = [
      "title": "汇报结果", "input": "执行结果", "output": "总结与下一步"},
 ]
 
-# 隔离区彻底删除：**唯一物理删除口、不可回滚**，所以单独一个模板、风险标高。
+# 清空已有隔离区条目的专用模板；该动作不可回滚且风险标高。
 EXECUTE_STEPS_PURGE: list[dict] = [
     {"id": "execute", "kind": "job", "risk": "high", "tool": "trash_purge",
      "title": "彻底删除隔离区内容（不可恢复）", "input": "已确认的隔离区条目", "output": "实际释放的空间"},

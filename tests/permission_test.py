@@ -67,7 +67,7 @@ def main() -> int:
     # 测试却一直红着 —— 而这种红是"测试过时"，不是"代码坏了"，看久了就没人看了。
     guards = " ".join(body.get("guards") or [])
     check("底线声明存在", len(body.get("guards") or []) >= 3, str(len(body.get("guards") or [])))
-    check("底线含：删除先进隔离区", "隔离区" in guards and "永不直接删" in guards)
+    check("底线含：普通清理默认进隔离区", "手动普通清理默认进隔离区" in guards)
     check("底线含：自保护不可写", "任何档位都不可写" in guards)
     check("底线含：只读档一律拒绝", "只读" in guards and "一律拒绝" in guards)
     tones = {m["id"]: m.get("tone") for m in body.get("modes") or []}

@@ -10,11 +10,11 @@
   <b>Español</b>
 </p>
 
-**¿El disco C: está lleno? Primero mira qué hay dentro.**
+**Gestión de archivos y limpieza de disco local y controlada para Windows: vista previa primero, confirmación explícita, operaciones trazables, reversión cuando esté disponible y un Agente de IA.**
 
-Una herramienta de limpieza de disco y gestión de archivos para Windows: análisis por escaneo, detección de duplicados, limpieza de archivos basura, migración entre discos y mapa de espacio.
+El análisis, la detección de duplicados, la limpieza de archivos basura, la migración entre discos y el mapa de espacio te ayudan a ver antes de actuar.
 
-Las operaciones de escritura muestran primero la lista de archivos afectados y esperan tu confirmación. Por defecto, la limpieza mueve los archivos a cuarentena, desde donde se pueden restaurar. Las acciones irreversibles se indican claramente y requieren una confirmación adicional.
+Las operaciones de escritura muestran primero la lista de archivos afectados y esperan tu confirmación. La limpieza manual mueve los archivos a cuarentena por defecto; podrán restaurarse si la ruta original y el estado del sistema de archivos lo permiten. La limpieza permanente del Agente y el vaciado de la cuarentena son irreversibles, se indican claramente y requieren confirmación adicional.
 La IA solo entiende lo que pides y redacta un plan; quien toca los archivos es el código local.
 Salvo las solicitudes al modelo del Agente y las explicaciones de IA que pidas expresamente, el análisis, la búsqueda de duplicados, la limpieza, la migración y las copias de seguridad se ejecutan localmente. No hace falta una cuenta.
 
@@ -24,7 +24,7 @@ Salvo las solicitudes al modelo del Agente y las explicaciones de IA que pidas e
 
 ## Inicio rápido
 
-1. Descarga [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) y descomprímelo donde quieras (por ejemplo `D:\Atlas`)
+1. Descarga [Atlas-2.1.1-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) y descomprímelo donde quieras (por ejemplo `D:\Atlas`)
 2. Haz doble clic en `Atlas\Atlas.exe`
 3. El navegador se abre solo. No aparece ninguna ventana de consola.
 
@@ -50,12 +50,12 @@ Desinstalar es borrar esa carpeta.
 | Migración entre discos | Copia y verifica elemento por elemento; el origen solo se toca si la verificación pasa; permite revertir |
 | Copia de proyecto | Snapshots ZIP excluyendo dependencias y carpetas de compilación; verificación de restauración |
 | Centro de tareas | Progreso en vivo, errores, cancelación y estado de reversión |
-| Papelera | La limpieza va a cuarentena y se puede restaurar en su sitio |
+| Papelera | La limpieza manual va a cuarentena; se puede intentar restaurar si la ruta y el sistema de archivos lo permiten |
 | Registro de operaciones | Consulta de auditoría y exportación |
 
 ## Modelo de seguridad
 
-- La limpieza genera una lista; tras la confirmación los archivos van a cuarentena, nunca se borran físicamente de inmediato.
+- La limpieza manual muestra primero una lista y, tras la confirmación, mueve los archivos a cuarentena por defecto. Se podrán restaurar si la ruta original y el estado del sistema de archivos lo permiten. La limpieza permanente del Agente y el vaciado de la cuarentena son irreversibles y requieren confirmación aparte.
 - La migración copia y verifica primero; el origen se procesa solo si la verificación pasa.
 - Las operaciones largas se ejecutan como tareas en segundo plano con progreso, cancelación y reversión.
 - La carpeta del propio proyecto, la carpeta de estado y la cuarentena están protegidas.

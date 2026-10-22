@@ -71,7 +71,7 @@
     "blocked_paths": []
   },
   "risk_level": "medium",
-  "risk_reason": "会删除文件，但先进隔离区、可恢复",
+  "risk_reason": "Agent 清理在确认后会永久删除，不可恢复",
   "needs_confirmation": true,
   "missing": [],
   "confidence": 0.9
@@ -86,7 +86,7 @@ needs_path` 字段，前端可以逐段迁移，不会一次性崩掉。
 | 等级 | 判定 |
 |---|---|
 | low | 只读动作；从隔离区恢复；单步查询 |
-| medium | 会移动/删除文件（先进隔离区、可恢复）；取消/回滚任务 |
+| medium | 会移动文件，或执行已标明不可恢复的 Agent 清理；取消/回滚任务的可用性取决于任务状态 |
 | high | 涉及盘符根目录、系统只读区、受保护目录，或批量对象 ≥ 500 项 |
 
 ### 同义表达与上下文指代

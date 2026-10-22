@@ -1,15 +1,5 @@
-# Atlas CI —— 每次 push / PR 都跑。
-#
-# 为什么要有这个文件：2026-10-17 的项目体检发现发行包落后源码 19 个提交、
-# 文档里的测试数停在 73 项（实际 105），而所有测试当时都是「手动跑一下」。
-# 没有自动门禁，「测试全绿」和「发出去的包是不是最新」全靠人记。
-#
-# 设计取舍：
-#   · runner 用 windows-latest —— 项目是 Windows 本地工具，路径/DPAPI/junction
-#     这些行为在 Linux 上根本测不出真问题。
-#   · 不装 pywebview —— 它只有打包启动器需要，CI 跑测试不需要原生窗口。
-#   · UI 冒烟（smoke_test.py / *_test.py）不进这里：它们要起服务或浏览器，
-#     重且脆，留给单独的手动流程。
+# Atlas CI runs the supported Windows backend matrix, installed entrypoints,
+# the focused safety suite, and the frontend production build on each push/PR.
 
 name: CI
 
@@ -33,7 +23,7 @@ defaults:
 
 jobs:
   backend:
-    name: Backend · lint / tests / safety
+    name: Backend · lint / tests / safety / install
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -59,15 +49,22 @@ jobs:
 
       - name: 安装依赖（走依赖锁）
         run: |
-          python -m pip install --upgrade pip
-          # 用 requirements.lock 而不是 requirements.txt：后者是 >= 宽松约束，
-          # 同一天不同机器可能装出不同版本，CI 也就失去意义了。
-          # 锁文件里已经包含 pytest / httpx / ruff，不需要另装。
-          pip install -r requirements.lock
+          python -m pip install -r requirements.lock
+
+      - name: 检查已安装依赖一致性
+        run: python -m pip check
+
+      - name: 安装后验证 console entrypoints
+        run: |
+          python -m pip install --no-build-isolation --no-deps -e .
+          python -m pip check
+          atlas --version
+          atlas-cli --help
+          atlas-mcp --help
 
       # ---- 第一道：静态检查 ----
       - name: Ruff
-        run: ruff check backend/ tests/ packaging/ main.py --output-format concise
+        run: ruff check backend/ atlas_app/ tests/ packaging/ main.py --output-format concise
 
       # ---- 第二道：全量单元测试 ----
       # 不要加 -q：pyproject 的 addopts 已经是 -q，再加一个会变成 -qq，
@@ -110,6 +107,9 @@ jobs:
       - name: 生产构建
         working-directory: frontend
         run: npm run build
+
+      - name: 检查完整依赖树
+        run: npm ls --all
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4

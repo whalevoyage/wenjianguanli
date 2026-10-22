@@ -139,9 +139,8 @@ def save_recipes(entries: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 # 用户设置（目前只有 Agent 的模型配置）
 #
-# 注意：这里的 api_key 是明文存在本机 .filepilot/settings.json 里
-# （该目录已在 .gitignore 中，不会进仓库）。个人自用工具，可接受；
-# 对外分发前应先换成系统凭据管理器 / DPAPI。
+# API Key 必须由 agent_settings 调用 secrets.protect() 后再交给通用 JSON 层；
+# Windows 发行版使用 DPAPI，失败时拒绝保存。显式非 Windows 开发明文模式会带 plain: 标记。
 # ---------------------------------------------------------------------------
 
 def read_settings() -> dict:

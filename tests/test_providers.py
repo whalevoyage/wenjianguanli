@@ -60,10 +60,47 @@ def test_custom_provider_uses_user_base_url(memory_settings):
     assert providers.chat_url() == "https://gw.example.com/v1/chat/completions"
 
 
-def test_custom_base_url_must_be_http(memory_settings):
-    with pytest.raises(ValueError) as info:
-        agent_settings.update_settings(provider="custom", llm_base_url="gw.example.com/v1")
-    assert "http" in str(info.value)
+@pytest.mark.parametrize("url", [
+    "https://api.example.com/v1",
+    "http://127.0.0.1:11434/v1",
+    "http://localhost:1234/v1",
+    "http://[::1]:1234/v1",
+    "http://127.42.0.8:1234/v1",
+])
+def test_custom_base_url_allows_https_and_loopback_http(memory_settings, url):
+    agent_settings.update_settings(provider="custom", llm_base_url=url)
+    assert providers.resolve().base_url == url
+
+
+@pytest.mark.parametrize("url", [
+    "http://example.com/v1",
+    "http://192.168.1.10/v1",
+    "http://localhost.evil.com/v1",
+    "http://127.0.0.1.evil.com/v1",
+    "http://user@evil.com/v1",
+    "ftp://example.com/v1",
+    "example.com/v1",
+    "https://api.example.com:65536/v1",
+])
+def test_custom_base_url_rejects_remote_http_and_invalid_urls(memory_settings, url):
+    with pytest.raises(ValueError):
+        agent_settings.update_settings(provider="custom", llm_base_url=url)
+
+
+def test_remote_http_error_explains_https_requirement(memory_settings):
+    with pytest.raises(ValueError, match="远程模型服务必须使用 HTTPS"):
+        agent_settings.update_settings(provider="custom", llm_base_url="http://example.com/v1")
+
+
+def test_custom_base_url_must_be_http_or_https(memory_settings):
+    with pytest.raises(ValueError, match="HTTPS"):
+        agent_settings.update_settings(provider="custom", llm_base_url="ftp://example.com/v1")
+
+
+def test_resolve_rejects_legacy_remote_http_configuration(memory_settings):
+    memory_settings.update(provider="custom", llm_base_url="http://example.com/v1")
+    with pytest.raises(ValueError, match="远程模型服务必须使用 HTTPS"):
+        providers.resolve()
 
 
 def test_unknown_provider_falls_back_instead_of_crashing(memory_settings):
@@ -104,6 +141,13 @@ def test_legacy_deepseek_env_still_works(memory_settings, monkeypatch):
     monkeypatch.delenv("FILEPILOT_LLM_API_KEY", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-legacy")
     assert providers.api_key() == "sk-legacy"
+
+
+def test_deepseek_only_reads_its_own_env(memory_settings, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-must-not-leak")
+    monkeypatch.setenv("FILEPILOT_LLM_API_KEY", "sk-custom-must-not-leak")
+    assert providers.api_key() == ""
 
 
 def test_openai_never_falls_back_to_deepseek_env(memory_settings, monkeypatch):

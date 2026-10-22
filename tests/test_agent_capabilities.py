@@ -2,7 +2,7 @@
 
 放开范围：相似图片、大文件、全文检索、快照、备份核对、隔离区彻底删除，
 以及编排放开（执行目标从 3 个扩到全部）。安全模型不变：plan-first + 二次确认 +
-删除先进隔离区 + 只读档拒发；trash_purge 是唯一物理删除口，风险标高。
+只读档拒发；Agent 永久清理与 `trash_purge` 都明确标记为不可恢复。
 """
 from backend.services import agent, agent_intent, agent_planner, agent_task, agent_tools
 from backend.services import clean as clean_svc
@@ -111,7 +111,7 @@ def test_empty_results_are_not_executable():
 # ---- 四、风险等级本地算 ----
 
 def test_risk_levels_for_new_actions():
-    # 彻底删除隔离区 = 唯一物理删除口、不可回滚 → high
+    # 清空已有隔离区条目不可回滚 → high
     level, why = agent_intent.compute_risk("trash_purge", {}, {}, {"file_count": 3})
     assert level == "high" and "不可恢复" in why
     # 相似图 / 大文件动的是用户数据 → medium 且措辞说清"不是垃圾"

@@ -10,11 +10,11 @@
   <a href="README.es.md">Español</a>
 </p>
 
-**Die C:-Platte ist voll? Erst hinsehen, dann handeln.**
+**Lokale und kontrollierte Dateiverwaltung und Datenträgerbereinigung für Windows: Vorschau zuerst, ausdrückliche Bestätigung, nachvollziehbare Vorgänge, Rollback soweit unterstützt und ein KI-Agent.**
 
-Ein Werkzeug für Datenträgerbereinigung und Dateiverwaltung unter Windows: Scan-Analyse, Duplikat-Erkennung, Aufräumen von Junk-Dateien, Verschieben zwischen Laufwerken, Speicherkarte.
+Scan-Analyse, Duplikaterkennung, Bereinigung von Junk-Dateien, Verschieben zwischen Laufwerken und eine Speicherkarte helfen dabei, erst hinzusehen und dann zu handeln.
 
-Schreibvorgänge zeigen zuerst die betroffene Dateiliste und warten auf Ihre Bestätigung. Standardmäßig verschiebt die Bereinigung Dateien in die Quarantäne, von wo sie wiederhergestellt werden können. Nicht umkehrbare Aktionen werden gekennzeichnet und erfordern eine zusätzliche Bestätigung.
+Schreibvorgänge zeigen zuerst die betroffene Dateiliste und warten auf Ihre Bestätigung. Manuelle Bereinigung verschiebt Dateien standardmäßig in die Quarantäne; eine Wiederherstellung ist möglich, wenn ursprünglicher Pfad und Dateisystemzustand es zulassen. Endgültige Agent-Bereinigung und das Leeren der Quarantäne sind nicht umkehrbar, werden gekennzeichnet und erfordern eine zusätzliche Bestätigung.
 Die KI versteht Ihre Anweisung und erstellt einen Plan — die Dateien bewegt ausschließlich lokaler Code.
 Abgesehen von Agent-Modellanfragen und ausdrücklich angeforderten KI-Erklärungen laufen Scan, Duplikaterkennung, Bereinigung, Migration und Sicherung lokal. Ein Konto ist nicht erforderlich.
 
@@ -24,7 +24,7 @@ Abgesehen von Agent-Modellanfragen und ausdrücklich angeforderten KI-Erklärung
 
 ## Schnellstart
 
-1. [Atlas-2.1.0-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) herunterladen und an einen beliebigen Ort entpacken (z. B. `D:\Atlas`)
+1. [Atlas-2.1.1-win64-portable.zip](https://github.com/whalevoyage/wenjianguanli/releases/latest) herunterladen und an einen beliebigen Ort entpacken (z. B. `D:\Atlas`)
 2. `Atlas\Atlas.exe` doppelklicken
 3. Der Browser öffnet sich automatisch. Es erscheint kein Konsolenfenster.
 
@@ -50,12 +50,12 @@ Deinstallieren heißt: diesen Ordner löschen.
 | Verschieben zwischen Laufwerken | Kopieren und Element für Element prüfen; Quellen erst danach anfassen; Rollback möglich |
 | Projekt-Backup | ZIP-Snapshots ohne Abhängigkeits- und Build-Ordner; Wiederherstellungsprüfung möglich |
 | Aufgabencenter | Live-Fortschritt, Fehler, Abbruch und Rollback-Status |
-| Papierkorb | Löschen geht zuerst in die Quarantäne und lässt sich zurückspielen |
+| Papierkorb | Manuelle Bereinigung geht zuerst in die Quarantäne; Wiederherstellung, soweit Pfad und Dateisystem es erlauben |
 | Protokoll | Audit-Einträge ansehen und exportieren |
 
 ## Sicherheitsmodell
 
-- Löschen erzeugt zuerst eine Liste; erst nach Bestätigung geht es in die Quarantäne — nie direkt physisch gelöscht.
+- Manuelle Bereinigung zeigt zuerst eine Liste und verschiebt Dateien nach Bestätigung standardmäßig in die Quarantäne. Eine Wiederherstellung ist möglich, wenn ursprünglicher Pfad und Dateisystemzustand es zulassen. Endgültige Agent-Bereinigung und das Leeren der Quarantäne sind nicht umkehrbar und erfordern eine separate Bestätigung.
 - Verschieben kopiert zuerst und prüft; die Quelle wird erst nach bestandener Prüfung angefasst.
 - Lange Operationen laufen als Hintergrundaufgaben mit Fortschritt, Abbruch und Rollback.
 - Projektordner, Statusordner und Quarantäne sind geschützt.

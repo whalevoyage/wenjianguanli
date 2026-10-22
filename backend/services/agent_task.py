@@ -362,8 +362,8 @@ def _run_step(step: dict, intent: dict, parent, index: int, total: int, items: l
             }
             return {"result": migrate.run_migrate(sub)}
         if tool == "trash_purge":
-            # ★ 全项目唯一的物理删除口：不可回滚（job 的回滚帮不上），
-            #   所以它走的是"确认卡逐条列出 + 最高风险等级"那道闸，而不是静默执行。
+            # ★ 清空已有隔离区条目不可回滚，所以走"确认卡逐条列出 + 最高风险等级"那道闸。
+            #   Agent 清理也会复用 purge helper，但只清理本次刚隔离的条目，并单独要求确认。
             # id 优先取方案清单里的（确认卡上列的就是那些），其次才是参数里显式给的。
             ids = [item.get("id") for item in items if item.get("id")]
             if not ids:

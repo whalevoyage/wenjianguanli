@@ -2,8 +2,8 @@
 
 这组测试守的是「说法必须等于做法」：
 
-  - 普通「清理垃圾 / 释放空间」**不许**被理解成物理删除；
-  - 物理删除只认强意图（彻底 / 清空 / 物理删除）；
+  - 本地规则不得把普通「清理垃圾 / 释放空间」识别为清空已有隔离区；
+  - 清空隔离区需强意图（彻底 / 清空 / 物理删除）；Agent 清理是另一路确认后永久删除；
   - 不可逆的操作，风险说明里必须写清「不可恢复」；
   - 反过来，风险元信息里**不许**出现「可恢复」这种承诺 ——
     清理类走的是「隔离 + 立刻清空同一批」，那句话说出去就是假的。
@@ -32,7 +32,7 @@ CLEAN_ACTIONS = ("junk_clean", "duplicate_clean", "similar_clean", "large_clean"
     "把垃圾清掉",
 ])
 def test_ordinary_clean_never_means_permanent_delete(message):
-    """日常说法一律不许落到物理删除口上。"""
+    """本地规则不得把普通清理说法映射成清空已有隔离区。"""
     plan = parse_local(message, {})
     assert plan is None or plan.get("action") != "trash_purge", f"「{message}」被理解成永久删除了"
 

@@ -96,14 +96,14 @@ TAG_ALIASES: dict[str, str] = {
 
 # 空间类口语带数字：「腾出 20G 空间」「释放 30 GB 容量」——先转成 canonical
 SPACE_GOAL_RE = re.compile(
-    r"(腾出|腾|释放|清出|省出|空出|挤出)\s*[\d.]*\s*(?:TB|GB|G|MB|M)?\s*(?:的)?\s*(空间|容量|地方)",
+    r"(腾出|腾|释放|清出|省出|空出|挤出)\s*+[\d.]*+\s*+(?:TB|GB|G|MB|M)?\s*+(?:的)?\s*+(空间|容量|地方)",
     re.I,
 )
 
 # 空间目标（可以不带数字）：「帮我腾出点空间」「C 盘满了」。
 # 它决定这次要不要走多步骤的「释放空间」流水线，而不是单跑一次扫描。
 SPACE_INTENT_RE = re.compile(
-    r"(腾出|腾|释放|清出|省出|空出|挤出)\s*[\d.]*\s*(?:TB|GB|G|MB|M)?\s*(?:的)?\s*(空间|容量|地方)"
+    r"(腾出|腾|释放|清出|省出|空出|挤出)\s*+[\d.]*+\s*+(?:TB|GB|G|MB|M)?\s*+(?:的)?\s*+(空间|容量|地方)"
     r"|(空间|容量|盘)\s*(不够|满了|吃紧|见底)"
     r"|(磁盘|硬盘|C盘|D盘|盘)\s*(满了|爆了|红了)",
     re.I,
@@ -544,7 +544,7 @@ def compute_risk(action: str, params: dict, constraints: dict, estimate: dict | 
     if action == "virtual_organize":
         return "low", "只把文件移动到分组子目录，不删除任何东西；任务页可整体回滚"
 
-    # 2026-10-13「能力放开」：隔离区彻底删除 = 全项目唯一的物理删除口，**不可回滚**
+    # 显式清空已有隔离区条目的动作：**不可回滚**。Agent 清理另有确认后清空新隔离条目的流程。
     if action == "trash_purge":
         count = int((estimate or {}).get("file_count") or 0)
         return "high", (f"将物理删除隔离区 {count} 项，**不可恢复**（隔离区是最后一道缓冲，删了就没了）"
