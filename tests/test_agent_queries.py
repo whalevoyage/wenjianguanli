@@ -1,4 +1,22 @@
 from backend.services import agent
+from backend.services import agent_intent
+import pytest
+
+
+@pytest.mark.parametrize("message", ["腾出20GB空间", "释放 30 GB 的容量", "腾     空间", "清出 1.5TB 地方"])
+def test_space_goal_normalization_preserves_supported_phrases(message):
+    assert agent_intent.canonical(message) == "清理垃圾"
+    assert agent_intent.SPACE_INTENT_RE.search(message)
+
+
+@pytest.mark.parametrize("message, expected", [
+    ("为何这个文件是垃圾", True),
+    ("垃圾的原因", False),
+    ("为何\n垃圾", False),
+    ("为何\n为何是垃圾", True),
+])
+def test_rule_explanation_requires_question_then_rule_on_same_line(message, expected):
+    assert agent._asks_for_rule_explanation(message) is expected
 
 
 def test_local_query_overview_returns_zero_token_result():

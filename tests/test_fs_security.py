@@ -1,5 +1,24 @@
 import pytest
 from backend import fsutil
+from backend.services import virtual
+
+
+@pytest.mark.parametrize("group_by", ["../outside", r"..\outside", "type/../../outside", "unknown"])
+def test_manifest_export_rejects_unknown_or_path_like_group(tmp_path, monkeypatch, group_by):
+    monkeypatch.setattr(virtual.config, "STATE_DIR", tmp_path)
+    with pytest.raises(ValueError, match="不支持的分组方式"):
+        virtual.export_manifest("", group_by, [{"name": "a.txt", "source": "a.txt"}])
+    assert not (tmp_path / "reports").exists()
+
+
+def test_manifest_export_stays_in_reports_for_known_group(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr(virtual.config, "STATE_DIR", tmp_path)
+    result = virtual.export_manifest("", "type", [{"name": "a.txt", "source": "a.txt"}])
+    exported = Path(result["path"])
+    assert exported.parent == tmp_path / "reports"
+    assert "a.txt" in exported.read_text(encoding="utf-8-sig")
 
 
 def test_assert_within_rejects_escape(tmp_path):

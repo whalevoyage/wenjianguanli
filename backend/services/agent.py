@@ -968,6 +968,15 @@ def _looks_like_action(text: str) -> bool:
     return bool(ACTION_HINT_RE.search(text or ""))
 
 
+def _asks_for_rule_explanation(text: str) -> bool:
+    """Match ordered question/rule words without a backtracking wildcard."""
+    for line in text.split("\n"):
+        question = re.search(r"为什么|为何|原因", line)
+        if question and any(word in line[question.end():] for word in ("垃圾", "清理", "判定", "规则")):
+            return True
+    return False
+
+
 def query_local(message: str, context: dict | None = None) -> dict | None:
     """零 token 回答状态、身份与解释类问题。
 
@@ -1012,7 +1021,7 @@ def query_local(message: str, context: dict | None = None) -> dict | None:
         return {"source": "local", "tokens": 0, "type": "status",
                 "message": f"当前有 {len(running)} 个任务在跑：" + "、".join(lines), "data": status}
 
-    if re.search(r"(为什么|为何|原因).*(垃圾|清理|判定|规则)", text):
+    if _asks_for_rule_explanation(text):
         paths = _extract_paths(text)
         return {
             "source": "local", "tokens": 0, "type": "explain",

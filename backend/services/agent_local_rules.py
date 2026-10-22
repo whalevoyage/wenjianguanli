@@ -63,7 +63,7 @@ def _extract_paths(text: str) -> list[str]:
 # 本地规则与 DeepSeek 共用同一套键：min_size_mb / extensions / keep
 # ---------------------------------------------------------------------------
 
-SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(GB|G|MB|M|gb|mb)(?![_A-Za-z0-9])")
+SIZE_RE = re.compile(r"(?<![\d.])(\d++(?:\.\d++)?)\s*+(GB|G|MB|M|gb|mb)(?![_A-Za-z0-9])")
 
 TYPE_KEYWORDS = {
     "视频": ["mp4", "mkv", "avi", "mov", "wmv", "flv"],
@@ -98,7 +98,7 @@ def _extract_filters(text: str) -> dict:
         value = float(match.group(1))
         if match.group(2).lower().startswith("g"):
             value *= 1024
-        filters["min_size_mb"] = max(1, min(int(value), 1_000_000))
+        filters["min_size_mb"] = max(1, int(min(value, 1_000_000)))
         break
 
     extensions: list[str] = []
